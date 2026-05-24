@@ -1,9 +1,7 @@
 // @ts-nocheck
-
-
-//Forcing Vercel fix
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabaseClient";
+import AdminLogin from "./AdminLogin";
 import {
   LayoutDashboard,
   Users,
@@ -251,14 +249,14 @@ const H_CFG = {
 export default function AdminDashboard() {
   const [activeNav, setActiveNav] = useState("dashboard");
   const [queue, setQueue] = useState([]);
-  const [serving, setServing] = useState(INITIAL_SERVING);
-  const [history, setHistory] = useState(HISTORY_LOG);
+  const [serving, setServing] = useState(null);
+  const [history, setHistory] = useState([]);
   const [paused, setPaused] = useState(false);
   const [graceActive, setGraceActive] = useState(false);
   const [graceTime, setGraceTime] = useState(15);
   const [noShowWarning, setNoShowWarning] = useState(false);
-  const [totalServed, setTotalServed] = useState(4);
-  const [noShows, setNoShows] = useState(1);
+  const [totalServed, setTotalServed] = useState(0);
+  const [noShows, setNoShows] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [walkInModal, setWalkInModal] = useState(false);
   const [walkInName, setWalkInName] = useState("");
@@ -279,12 +277,91 @@ export default function AdminDashboard() {
   const [hSortDir, setHSortDir] = useState("desc");
   // Settings state
   const [sGrace, setSGrace] = useState(15);
-  const [sWindow, setSWindow] = useState("3");
+  const [sWindow, setSWindow] = useState("1");
   const [sPrinter, setSPrinter] = useState(false);
   const [sMaxQueue, setSMaxQueue] = useState(50);
   const [sAutoAdvance, setSAutoAdvance] = useState(false);
   const [sPwModal, setSPwModal] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
+
+  // ── History tab: live stats fetched from Supabase ─────────
+  const [historyStats, setHistoryStats] = useState({
+    completionRate: 0,
+    totalServed: 0,
+    noShowRate: 0,
+  });
+
+  const fetchHistoryData = async () => {
+    const { data: allHistory } = await supabase
+      .from("queue_tickets")
+      .select("status")
+      .in("status", ["served", "noshow", "removed"]);
+
+    if (allHistory && allHistory.length > 0) {
+      const total = allHistory.length;
+      const served = allHistory.filter((t) => t.status === "served").length;
+      const noshow = allHistory.filter((t) => t.status === "noshow").length;
+      setHistoryStats({
+        totalServed: served,
+        completionRate: Math.round((served / total) * 100),
+        noShowRate: Math.round((noshow / total) * 100),
+      });
+    } else {
+      setHistoryStats({ completionRate: 0, totalServed: 0, noShowRate: 0 });
+    }
+
+    const { data: logData } = await supabase
+      .from("queue_tickets")
+      .select("*")
+      .in("status", ["served", "noshow", "removed"])
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (logData) setHistory(logData);
+  };
+
+  useEffect(() => {
+    if (activeNav === "history") {
+      fetchHistoryData();
+    }
+  }, [activeNav]);
+
+  // ── Auth: session gatekeeper ──────────────────────────────
+  const [session, setSession] = useState(null);
+  // --- USER DATA EXTRACTOR ---
+  const userEmail = session?.user?.email || "admin@sti.edu.ph";
+
+  // 1. Check Supabase for a saved name. If it's blank, fall back to the email trick.
+  const savedName = session?.user?.user_metadata?.display_name;
+  const rawName = savedName || userEmail.split("@")[0];
+
+  // 2. Capitalize the first letter
+  const displayName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+
+  // 3. Get initials for the avatar
+  const initials = displayName.substring(0, 2).toUpperCase();
+  // ---------------------------
+
+  const [authReady, setAuthReady] = useState(false);
+
+  useEffect(() => {
+    // Check existing session on mount
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setAuthReady(true);
+    });
+    // Live listener — updates instantly on login or logout
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) =>
+      setSession(session)
+    );
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    // onAuthStateChange above sets session → null automatically
+  };
 
   const timerRef = useRef(null);
   const nowStr = new Date().toLocaleTimeString([], {
@@ -317,6 +394,7 @@ export default function AdminDashboard() {
     course: row.course,
     time: row.appointment_time,
     type: row.booking_type === "walkin" ? "walkin" : "booked",
+    department: row.department, // "Cashier" | "Registrar"
     eta: (index + 1) * 2,
     id: row.id, // keep the Supabase PK for future updates
   });
@@ -375,7 +453,8 @@ export default function AdminDashboard() {
   };
 
   const callNext = async () => {
-    if (paused || queue.length === 0) return;
+    // Allow action if there's a serving student (even with empty activeWindowQueue), unless paused
+    if (paused || (!serving && activeWindowQueue.length === 0)) return;
 
     // 1. Mark the current serving student as 'served' in Supabase
     if (serving) {
@@ -394,8 +473,16 @@ export default function AdminDashboard() {
         console.error("Error marking served:", servedError.message);
     }
 
-    // 2. Promote the next student to 'serving' in Supabase and local state
-    const [next, ...rest] = queue;
+    // 2. If no more tickets for this window, just clear the terminal
+    if (activeWindowQueue.length === 0) {
+      setServing(null);
+      setNoShowWarning(false);
+      setGraceActive(false);
+      return;
+    }
+
+    // 3. Promote the next student for THIS window to 'serving'
+    const next = activeWindowQueue[0]; // first in line for this department
     const { error: servingError } = await supabase
       .from("queue_tickets")
       .update({ status: "serving" })
@@ -404,7 +491,8 @@ export default function AdminDashboard() {
       console.error("Error marking serving:", servingError.message);
 
     setServing({ ...next, calledAt: nowStr });
-    setQueue(rest);
+    // Remove only this ticket from the master queue; others departments stay
+    setQueue((q) => q.filter((s) => s.ticket !== next.ticket));
     setNoShowWarning(false);
     setGraceActive(false);
     startGrace();
@@ -488,7 +576,13 @@ export default function AdminDashboard() {
   };
 
   // ── Derived values ────────────────────────────────────────
-  const avgWait = queue.length > 0 ? Math.round(queue.length * 2.5) : 0;
+
+  // Smart filter: only tickets belonging to the active window's department
+  const activeDepartment = sWindow === "1" ? "Cashier" : "Registrar";
+  const activeWindowQueue = queue.filter(
+    (s) => s.department === activeDepartment
+  );
+
   const circumference = 2 * Math.PI * 38;
   const dashOffset = circumference * (1 - graceTime / sGrace); // ← uses sGrace
 
@@ -689,101 +783,86 @@ export default function AdminDashboard() {
     </div>
   );
 
+  // --- MINI HISTORY COMPONENT ---
   const HistoryItem = ({ h }) => {
-    const cfg = H_CFG[h.status] || {};
-    const Icon = cfg.icon;
+    const getStatusColor = (status) => {
+      switch (status) {
+        case "served":
+          return {
+            bg: "rgba(16,185,129,0.15)",
+            text: "#34d399",
+            border: "rgba(16,185,129,0.2)",
+          };
+        case "noshow":
+          return {
+            bg: "rgba(239,68,68,0.15)",
+            text: "#f87171",
+            border: "rgba(239,68,68,0.2)",
+          };
+        case "removed":
+          return {
+            bg: "rgba(100,116,139,0.15)",
+            text: "#94a3b8",
+            border: "rgba(100,116,139,0.2)",
+          };
+        default:
+          return {
+            bg: "rgba(100,116,139,0.15)",
+            text: "#94a3b8",
+            border: "rgba(100,116,139,0.2)",
+          };
+      }
+    };
+    const colors = getStatusColor(h.status);
+
     return (
       <div
         style={{
-          padding: "11px 20px",
-          borderBottom: "1px solid rgba(255,255,255,0.04)",
           display: "flex",
           alignItems: "center",
-          gap: 10,
+          gap: 12,
+          padding: "12px 20px",
+          borderBottom: "1px solid rgba(255,255,255,0.04)",
         }}
       >
         <div
           style={{
-            width: 30,
-            height: 30,
-            borderRadius: 9,
-            background: cfg.bg,
-            border: `1px solid ${cfg.border}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flexShrink: 0,
+            fontFamily: "'Space Mono',monospace",
+            fontSize: 11,
+            color: "rgba(255,255,255,0.4)",
+            fontWeight: 700,
           }}
         >
-          <Icon size={13} color={cfg.color} />
+          {h.ticket_number}
         </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span
-              style={{
-                fontSize: 12,
-                fontWeight: 700,
-                color: "rgba(255,255,255,0.8)",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {h.name}
-            </span>
-            {h.walkin && (
-              <span
-                style={{
-                  fontSize: 9,
-                  fontWeight: 700,
-                  color: "#fbbf24",
-                  background: "rgba(251,191,36,0.1)",
-                  border: "1px solid rgba(251,191,36,0.2)",
-                  borderRadius: 4,
-                  padding: "1px 5px",
-                  flexShrink: 0,
-                }}
-              >
-                Walk-in
-              </span>
-            )}
-          </div>
+        <div style={{ flex: 1 }}>
           <div
             style={{
-              fontSize: 10,
-              color: "rgba(255,255,255,0.3)",
-              display: "flex",
-              gap: 5,
-              alignItems: "center",
+              fontSize: 13,
+              fontWeight: 600,
+              color: "rgba(255,255,255,0.85)",
             }}
           >
-            <span style={{ fontFamily: "'Space Mono',monospace" }}>
-              {h.ticket}
-            </span>
-            <span>·</span>
-            <span>{h.time}</span>
-            {h.duration !== "—" && (
-              <>
-                <span>·</span>
-                <span>{h.duration}</span>
-              </>
-            )}
+            {h.student_name}
+          </div>
+          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+            {h.appointment_time}
           </div>
         </div>
-        <span
+        <div
           style={{
-            fontSize: 10,
-            fontWeight: 700,
-            color: cfg.color,
-            background: cfg.bg,
-            border: `1px solid ${cfg.border}`,
-            borderRadius: 99,
-            padding: "2px 8px",
-            flexShrink: 0,
+            background: colors.bg,
+            color: colors.text,
+            border: `1px solid ${colors.border}`,
+            fontSize: 9,
+            fontWeight: 800,
+            padding: "3px 8px",
+            borderRadius: 6,
+            letterSpacing: "0.04em",
           }}
         >
-          {cfg.label}
-        </span>
+          {h.status ? h.status.toUpperCase() : "UNKNOWN"}
+        </div>
       </div>
     );
   };
@@ -805,16 +884,16 @@ export default function AdminDashboard() {
         {[
           {
             label: "In Queue",
-            value: queue.length,
+            value: activeWindowQueue.length,
             icon: Users,
             color: "#3b82f6",
             bg: "rgba(59,130,246,0.12)",
             border: "rgba(59,130,246,0.2)",
           },
           {
-            label: "Avg. Wait Time",
-            value: `${avgWait}m`,
-            icon: Clock,
+            label: "Now Serving",
+            value: serving ? serving.ticket : "—",
+            icon: Monitor,
             color: "#a78bfa",
             bg: "rgba(167,139,250,0.1)",
             border: "rgba(167,139,250,0.2)",
@@ -1095,15 +1174,17 @@ export default function AdminDashboard() {
             <button
               className="ctrl-btn"
               onClick={callNext}
-              disabled={paused || queue.length === 0}
+              disabled={paused || (!serving && activeWindowQueue.length === 0)}
               style={{
                 width: "100%",
                 padding: "16px",
                 borderRadius: 14,
                 border: "none",
                 background:
-                  paused || queue.length === 0
+                  paused || (!serving && activeWindowQueue.length === 0)
                     ? "rgba(37,99,235,0.2)"
+                    : serving && activeWindowQueue.length === 0
+                    ? "linear-gradient(135deg,#16a34a,#15803d)"
                     : "linear-gradient(135deg,#2563eb,#1d4ed8)",
                 color: "white",
                 fontSize: 16,
@@ -1116,24 +1197,34 @@ export default function AdminDashboard() {
                 fontFamily: "'Outfit',sans-serif",
                 marginBottom: 10,
                 boxShadow:
-                  paused || queue.length === 0
+                  paused || (!serving && activeWindowQueue.length === 0)
                     ? "none"
+                    : serving && activeWindowQueue.length === 0
+                    ? "0 8px 28px rgba(22,163,74,0.45)"
                     : "0 8px 28px rgba(37,99,235,0.45)",
               }}
             >
-              <SkipForward size={20} /> Call Next
-              {queue.length > 0 && !paused && (
-                <div
-                  style={{
-                    background: "rgba(255,255,255,0.2)",
-                    borderRadius: 99,
-                    padding: "2px 8px",
-                    fontSize: 12,
-                    fontWeight: 700,
-                  }}
-                >
-                  {queue[0]?.ticket}
-                </div>
+              {serving && activeWindowQueue.length === 0 ? (
+                <>
+                  <CheckCircle2 size={20} /> Complete Service
+                </>
+              ) : (
+                <>
+                  <SkipForward size={20} /> Call Next
+                  {activeWindowQueue.length > 0 && !paused && (
+                    <div
+                      style={{
+                        background: "rgba(255,255,255,0.2)",
+                        borderRadius: 99,
+                        padding: "2px 8px",
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {activeWindowQueue[0]?.ticket}
+                    </div>
+                  )}
+                </>
               )}
             </button>
             <div
@@ -1265,7 +1356,7 @@ export default function AdminDashboard() {
             >
               UP NEXT
             </div>
-            {queue.slice(0, 3).map((s, i) => (
+            {activeWindowQueue.slice(0, 3).map((s, i) => (
               <div
                 key={s.ticket}
                 style={{
@@ -1321,7 +1412,7 @@ export default function AdminDashboard() {
                 <TypeBadge type={s.type} />
               </div>
             ))}
-            {queue.length === 0 && (
+            {activeWindowQueue.length === 0 && (
               <div
                 style={{
                   textAlign: "center",
@@ -1379,7 +1470,7 @@ export default function AdminDashboard() {
                 fontWeight: 700,
               }}
             >
-              {queue.length}
+              {activeWindowQueue.length}
             </div>
             <button
               onClick={() => setActiveNav("queue")}
@@ -1398,7 +1489,7 @@ export default function AdminDashboard() {
             </button>
           </div>
           <div style={{ maxHeight: 240, overflowY: "auto" }}>
-            {queue.length === 0 ? (
+            {activeWindowQueue.length === 0 ? (
               <div
                 style={{
                   textAlign: "center",
@@ -1410,7 +1501,7 @@ export default function AdminDashboard() {
                 Queue is empty
               </div>
             ) : (
-              queue.slice(0, 6).map((s, i) => (
+              activeWindowQueue.slice(0, 6).map((s, i) => (
                 <div
                   key={s.ticket}
                   className={`queue-row ${
@@ -2121,9 +2212,9 @@ export default function AdminDashboard() {
       .filter((h) => {
         const q = hSearch.toLowerCase();
         const ms =
-          h.name.toLowerCase().includes(q) ||
-          h.ticket.toLowerCase().includes(q) ||
-          h.course.toLowerCase().includes(q);
+          (h.student_name || "").toLowerCase().includes(q) ||
+          (h.ticket_number || "").toLowerCase().includes(q) ||
+          (h.course || "").toLowerCase().includes(q);
         const mv = hStatus === "all" || h.status === hStatus;
         const ml =
           hLevel === "all" ||
@@ -2133,10 +2224,21 @@ export default function AdminDashboard() {
       })
       .sort((a, b) => {
         let cmp = 0;
-        if (hSortCol === "name") cmp = a.name.localeCompare(b.name);
-        if (hSortCol === "ticket") cmp = a.ticket.localeCompare(b.ticket);
-        if (hSortCol === "status") cmp = a.status.localeCompare(b.status);
-        if (hSortCol === "time") cmp = a.time.localeCompare(b.time);
+        // Use the new database column names, and add || "" so empty cells never crash the app
+        if (hSortCol === "name") {
+          cmp = (a.student_name || "").localeCompare(b.student_name || "");
+        }
+        if (hSortCol === "ticket") {
+          cmp = (a.ticket_number || "").localeCompare(b.ticket_number || "");
+        }
+        if (hSortCol === "status") {
+          cmp = (a.status || "").localeCompare(b.status || "");
+        }
+        if (hSortCol === "time") {
+          cmp = (a.appointment_time || "").localeCompare(
+            b.appointment_time || ""
+          );
+        }
         return hSortDir === "asc" ? cmp : -cmp;
       });
 
@@ -2237,184 +2339,126 @@ export default function AdminDashboard() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gap: 14,
-            marginBottom: 20,
+            gridTemplateColumns: "1fr 1fr 1fr",
+            gap: 24,
+            marginBottom: 32,
           }}
         >
           <div
+            className="card-shadow"
             style={{
-              background: "rgba(34,197,94,0.08)",
-              border: "1px solid rgba(34,197,94,0.2)",
+              background: "rgba(15,25,54,0.8)",
               borderRadius: 16,
-              padding: "20px",
+              border: "1px solid rgba(255,255,255,0.08)",
+              padding: 24,
             }}
           >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                marginBottom: 14,
-              }}
-            >
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <div
                 style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 10,
-                  background: "rgba(34,197,94,0.12)",
-                  border: "1px solid rgba(34,197,94,0.2)",
+                  width: 42,
+                  height: 42,
+                  borderRadius: 12,
+                  background: "rgba(34, 197, 94, 0.15)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                 }}
               >
-                <Percent size={16} color="#4ade80" />
+                <CheckCircle2 size={20} color="#4ade80" />
               </div>
-              <span style={{ fontSize: 11, color: "#4ade80", fontWeight: 600 }}>
-                Completion Rate
-              </span>
-            </div>
-            <div
-              style={{
-                fontFamily: "'Space Mono',monospace",
-                fontSize: 30,
-                fontWeight: 700,
-                color: "white",
-                lineHeight: 1,
-                marginBottom: 10,
-              }}
-            >
-              {completionRate}%
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <MiniBar value={completionRate} max={100} color="#4ade80" />
-              <span
-                style={{
-                  fontSize: 10,
-                  color: "rgba(255,255,255,0.35)",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {servedEntries.length}/{totalEntries} served
-              </span>
+              <div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: "rgba(255,255,255,0.4)",
+                  }}
+                >
+                  Completion Rate
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: "white" }}>
+                  {historyStats.completionRate}%
+                </div>
+              </div>
             </div>
           </div>
           <div
+            className="card-shadow"
             style={{
-              background: "rgba(96,165,250,0.08)",
-              border: "1px solid rgba(96,165,250,0.2)",
+              background: "rgba(15,25,54,0.8)",
               borderRadius: 16,
-              padding: "20px",
+              border: "1px solid rgba(255,255,255,0.08)",
+              padding: 24,
             }}
           >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                marginBottom: 14,
-              }}
-            >
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <div
                 style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 10,
-                  background: "rgba(96,165,250,0.12)",
-                  border: "1px solid rgba(96,165,250,0.2)",
+                  width: 42,
+                  height: 42,
+                  borderRadius: 12,
+                  background: "rgba(56, 189, 248, 0.15)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                 }}
               >
-                <TimerReset size={16} color="#60a5fa" />
+                <Users size={20} color="#38bdf8" />
               </div>
-              <span style={{ fontSize: 11, color: "#60a5fa", fontWeight: 600 }}>
-                Avg. Resolution
-              </span>
-            </div>
-            <div
-              style={{
-                fontFamily: "'Space Mono',monospace",
-                fontSize: 30,
-                fontWeight: 700,
-                color: "white",
-                lineHeight: 1,
-                marginBottom: 10,
-              }}
-            >
-              {avgResolution}
-            </div>
-            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
-              Per served student today
+              <div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: "rgba(255,255,255,0.4)",
+                  }}
+                >
+                  Total Users Served
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: "white" }}>
+                  {historyStats.totalServed}
+                </div>
+              </div>
             </div>
           </div>
           <div
+            className="card-shadow"
             style={{
-              background: "rgba(248,113,113,0.08)",
-              border: "1px solid rgba(248,113,113,0.2)",
+              background: "rgba(15,25,54,0.8)",
               borderRadius: 16,
-              padding: "20px",
+              border: "1px solid rgba(255,255,255,0.08)",
+              padding: 24,
             }}
           >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                marginBottom: 14,
-              }}
-            >
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <div
                 style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 10,
-                  background: "rgba(248,113,113,0.1)",
-                  border: "1px solid rgba(248,113,113,0.2)",
+                  width: 42,
+                  height: 42,
+                  borderRadius: 12,
+                  background: "rgba(248, 113, 113, 0.15)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                 }}
               >
-                <AlertOctagon size={16} color="#f87171" />
+                <AlertOctagon size={20} color="#f87171" />
               </div>
-              <span style={{ fontSize: 11, color: "#f87171", fontWeight: 600 }}>
-                No-Show Rate
-              </span>
-            </div>
-            <div
-              style={{
-                fontFamily: "'Space Mono',monospace",
-                fontSize: 30,
-                fontWeight: 700,
-                color: "white",
-                lineHeight: 1,
-                marginBottom: 10,
-              }}
-            >
-              {totalEntries > 0
-                ? Math.round((noshowEntries.length / totalEntries) * 100)
-                : 0}
-              %
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <MiniBar
-                value={noshowEntries.length}
-                max={Math.max(totalEntries, 1)}
-                color="#f87171"
-              />
-              <span
-                style={{
-                  fontSize: 10,
-                  color: "rgba(255,255,255,0.35)",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {noshowEntries.length} today
-              </span>
+              <div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: "rgba(255,255,255,0.4)",
+                  }}
+                >
+                  No-Show Rate
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: "white" }}>
+                  {historyStats.noShowRate}%
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -2780,197 +2824,111 @@ export default function AdminDashboard() {
 
           {/* Rows */}
           <div style={{ maxHeight: 440, overflowY: "auto" }}>
-            {filtered.length === 0 ? (
-              <div style={{ textAlign: "center", padding: "52px 20px" }}>
-                <Search
-                  size={32}
-                  color="rgba(255,255,255,0.07)"
-                  style={{ marginBottom: 12 }}
-                />
-                <div
-                  style={{
-                    fontSize: 14,
-                    color: "rgba(255,255,255,0.25)",
-                    fontWeight: 500,
-                  }}
-                >
-                  No records match your filters
-                </div>
-                <button
-                  onClick={() => {
-                    setHSearch("");
-                    setHStatus("all");
-                    setHLevel("all");
-                  }}
-                  style={{
-                    marginTop: 10,
-                    background: "none",
-                    border: "none",
-                    color: "#a78bfa",
-                    fontSize: 12,
-                    cursor: "pointer",
-                    fontFamily: "'Outfit',sans-serif",
-                  }}
-                >
-                  Clear all filters
-                </button>
+            {history.length === 0 ? (
+              <div
+                style={{
+                  padding: "32px",
+                  textAlign: "center",
+                  color: "rgba(255,255,255,0.3)",
+                }}
+              >
+                No history logs available.
               </div>
             ) : (
-              filtered.map((h, i) => {
-                const cfg = STATUS_CFG[h.status] || {};
-                const Icon = cfg.icon;
-                const isSHS = SHS_PROGRAMS.includes(h.course);
-                return (
+              history.map((log, i) => (
+                <div
+                  key={log.id || i}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "100px 1fr 180px 140px 100px",
+                    gap: 16,
+                    padding: "16px 24px",
+                    borderBottom: "1px solid rgba(255,255,255,0.06)",
+                    alignItems: "center",
+                  }}
+                >
                   <div
-                    key={i}
-                    className="lq-row"
                     style={{
-                      display: "grid",
-                      gridTemplateColumns:
-                        "40px 72px 1fr 140px 120px 100px 90px",
-                      padding: "13px 20px",
-                      borderBottom: "1px solid rgba(255,255,255,0.04)",
-                      alignItems: "center",
-                      gap: 12,
+                      fontFamily: "'Space Mono', monospace",
+                      fontWeight: 700,
+                      color: "rgba(255,255,255,0.9)",
+                      fontSize: 13,
                     }}
                   >
+                    {log.ticket_number}
+                  </div>
+                  <div>
                     <div
                       style={{
-                        fontFamily: "'Space Mono',monospace",
-                        fontSize: 11,
-                        color: "rgba(255,255,255,0.2)",
-                        fontWeight: 700,
+                        fontSize: 14,
+                        fontWeight: 600,
+                        color: "rgba(255,255,255,0.9)",
                       }}
                     >
-                      {i + 1}
+                      {log.student_name}
                     </div>
                     <div
-                      style={{ display: "flex", alignItems: "center", gap: 6 }}
+                      style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}
                     >
-                      <span
-                        style={{
-                          fontFamily: "'Space Mono',monospace",
-                          fontSize: 12,
-                          fontWeight: 700,
-                          color: "rgba(255,255,255,0.65)",
-                        }}
-                      >
-                        {h.ticket}
-                      </span>
-                      {h.walkin && (
-                        <span
-                          style={{
-                            fontSize: 8,
-                            fontWeight: 700,
-                            color: "#fbbf24",
-                            background: "rgba(251,191,36,0.1)",
-                            border: "1px solid rgba(251,191,36,0.2)",
-                            borderRadius: 4,
-                            padding: "1px 4px",
-                          }}
-                        >
-                          W
-                        </span>
-                      )}
-                    </div>
-                    <div>
-                      <div
-                        style={{
-                          fontSize: 13,
-                          fontWeight: 600,
-                          color: "white",
-                        }}
-                      >
-                        {h.name}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 10,
-                          color: "rgba(255,255,255,0.35)",
-                          marginTop: 2,
-                        }}
-                      >
-                        {h.walkin ? "Walk-in" : "Booked"}
-                      </div>
-                    </div>
-                    <div>
-                      <div
-                        style={{
-                          fontSize: 11,
-                          color: "rgba(255,255,255,0.55)",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          marginBottom: 3,
-                        }}
-                        title={h.course}
-                      >
-                        {h.course}
-                      </div>
-                      <span
-                        style={{
-                          fontSize: 9,
-                          fontWeight: 700,
-                          borderRadius: 4,
-                          padding: "2px 6px",
-                          background: isSHS
-                            ? "rgba(251,191,36,0.1)"
-                            : "rgba(129,140,248,0.12)",
-                          color: isSHS ? "#fbbf24" : "#818cf8",
-                          border: `1px solid ${
-                            isSHS
-                              ? "rgba(251,191,36,0.2)"
-                              : "rgba(129,140,248,0.25)"
-                          }`,
-                        }}
-                      >
-                        {isSHS ? "Senior High" : "College"}
-                      </span>
-                    </div>
-                    <div>
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 5,
-                          fontSize: 11,
-                          fontWeight: 700,
-                          borderRadius: 99,
-                          padding: "4px 11px",
-                          background: cfg.bg,
-                          color: cfg.color,
-                          border: `1px solid ${cfg.border}`,
-                        }}
-                      >
-                        {Icon && <Icon size={11} />}
-                        {cfg.label}
-                      </span>
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color: "rgba(255,255,255,0.5)",
-                        fontFamily: "'Space Mono',monospace",
-                      }}
-                    >
-                      {h.time}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color:
-                          h.duration === "—"
-                            ? "rgba(255,255,255,0.2)"
-                            : "rgba(255,255,255,0.6)",
-                        fontFamily: "'Space Mono',monospace",
-                        fontWeight: 700,
-                      }}
-                    >
-                      {h.duration}
+                      {log.course}
                     </div>
                   </div>
-                );
-              })
+                  <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)" }}>
+                    {new Date(
+                      log.created_at || Date.now()
+                    ).toLocaleDateString()}{" "}
+                    · {log.appointment_time}
+                  </div>
+                  <div>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: "#93c5fd",
+                        background: "rgba(37,99,235,0.15)",
+                        border: "1px solid rgba(37,99,235,0.2)",
+                        borderRadius: 6,
+                        padding: "4px 8px",
+                      }}
+                    >
+                      {log.department}
+                    </span>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        padding: "4px 10px",
+                        borderRadius: 99,
+                        ...(log.status === "served"
+                          ? {
+                              background: "rgba(16,185,129,0.15)",
+                              color: "#34d399",
+                              border: "1px solid rgba(16,185,129,0.2)",
+                            }
+                          : log.status === "noshow"
+                          ? {
+                              background: "rgba(239,68,68,0.15)",
+                              color: "#f87171",
+                              border: "1px solid rgba(239,68,68,0.2)",
+                            }
+                          : {
+                              background: "rgba(100,116,139,0.15)",
+                              color: "#94a3b8",
+                              border: "1px solid rgba(100,116,139,0.2)",
+                            }),
+                      }}
+                    >
+                      {log.status === "served"
+                        ? "SERVED"
+                        : log.status === "noshow"
+                        ? "NO-SHOW"
+                        : "REMOVED"}
+                    </span>
+                  </div>
+                </div>
+              ))
             )}
           </div>
 
@@ -3352,10 +3310,8 @@ export default function AdminDashboard() {
                 value={sWindow}
                 onChange={setSWindow}
                 options={[
-                  { value: "1", label: "Window 1 — Freshmen" },
-                  { value: "2", label: "Window 2 — Transferees" },
-                  { value: "3", label: "Window 3 — Registrar" },
-                  { value: "4", label: "Window 4 — Accounting" },
+                  { value: "1", label: "Window 1 — Cashier" },
+                  { value: "2", label: "Window 2 — Registrar" },
                 ]}
               />
             </SettingRow>
@@ -3448,7 +3404,7 @@ export default function AdminDashboard() {
                     flexShrink: 0,
                   }}
                 >
-                  RC
+                  {initials}
                 </div>
                 <div style={{ flex: 1 }}>
                   <div
@@ -3459,7 +3415,7 @@ export default function AdminDashboard() {
                       letterSpacing: "-0.02em",
                     }}
                   >
-                    Rosa Cruz
+                    {displayName}
                   </div>
                   <div
                     style={{
@@ -3530,7 +3486,7 @@ export default function AdminDashboard() {
                   fontFamily: "'Space Mono',monospace",
                 }}
               >
-                r.cruz@sti.edu.ph
+                {userEmail}
               </span>
             </SettingRow>
             <SettingRow
@@ -3551,43 +3507,6 @@ export default function AdminDashboard() {
               >
                 Registrar Admin
               </span>
-            </SettingRow>
-          </SectionCard>
-
-          {/* Security */}
-          <SectionCard
-            icon={ShieldCheck}
-            iconColor="#34d399"
-            iconBg="rgba(52,211,153,0.1)"
-            iconBorder="rgba(52,211,153,0.2)"
-            title="Security"
-            subtitle="Manage your login credentials and session security"
-          >
-            <SettingRow
-              label="Password"
-              hint="Last changed 30 days ago. Use a strong, unique password."
-              noBorder
-            >
-              <button
-                onClick={() => setSPwModal(true)}
-                className="ctrl-btn"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 7,
-                  padding: "9px 16px",
-                  borderRadius: 10,
-                  border: "1px solid rgba(255,255,255,0.12)",
-                  background: "rgba(255,255,255,0.05)",
-                  color: "rgba(255,255,255,0.7)",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  fontFamily: "'Outfit',sans-serif",
-                }}
-              >
-                <KeyRound size={13} /> Change Password
-              </button>
             </SettingRow>
           </SectionCard>
 
@@ -3627,7 +3546,7 @@ export default function AdminDashboard() {
                 onClick={() => {
                   setSGrace(15);
                   setGraceTime(15);
-                  setSWindow("3");
+                  setSWindow("1");
                   setSPrinter(false);
                   setSMaxQueue(50);
                   setSAutoAdvance(false);
@@ -3738,7 +3657,7 @@ export default function AdminDashboard() {
                         marginTop: 1,
                       }}
                     >
-                      Rosa Cruz · Registrar
+                      {displayName} · Registrar
                     </div>
                   </div>
                 </div>
@@ -3849,7 +3768,45 @@ export default function AdminDashboard() {
   };
 
   // ╔═══════════════════════════════════════════════════════════╗
-  // ║  ROOT RENDER                                             ║
+  // ║  GATEKEEPER — auth check before rendering anything       ║
+  // ╚═══════════════════════════════════════════════════════════╝
+
+  // Still waiting for Supabase to respond — show a neutral spinner
+  if (!authReady) {
+    return (
+      <div
+        style={{
+          width: "100vw",
+          height: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#0d1526",
+        }}
+      >
+        <div
+          style={{
+            width: 34,
+            height: 34,
+            border: "3px solid rgba(59,130,246,0.2)",
+            borderTop: "3px solid #3b82f6",
+            borderRadius: "50%",
+            animation: "spin 0.8s linear infinite",
+          }}
+        />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  // No valid session — show login screen
+  if (!session) {
+    return <AdminLogin onLogin={() => {}} />;
+    // onLogin is a no-op: onAuthStateChange handles the state update automatically
+  }
+
+  // ╔═══════════════════════════════════════════════════════════╗
+  // ║  ROOT RENDER  (session confirmed)                        ║
   // ╚═══════════════════════════════════════════════════════════╝
   return (
     <div
@@ -3888,21 +3845,18 @@ export default function AdminDashboard() {
             minHeight: 64,
           }}
         >
-          <div
+          {/* Custom Logo Image */}
+          <img
+            src="/logo.png"
+            alt="SAS Logo"
             style={{
               width: 36,
               height: 36,
-              borderRadius: 10,
-              background: "linear-gradient(135deg,#2563eb,#1d4ed8)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
+              objectFit: "contain",
+              borderRadius: 8,
               flexShrink: 0,
-              boxShadow: "0 4px 14px rgba(37,99,235,0.4)",
             }}
-          >
-            <GraduationCap size={18} color="white" />
-          </div>
+          />
           {!sidebarCollapsed && (
             <div style={{ overflow: "hidden" }}>
               <div
@@ -4025,7 +3979,7 @@ export default function AdminDashboard() {
                     color: "white",
                   }}
                 >
-                  RC
+                  {initials}
                 </div>
                 <div>
                   <div
@@ -4035,7 +3989,7 @@ export default function AdminDashboard() {
                       color: "rgba(255,255,255,0.85)",
                     }}
                   >
-                    Rosa Cruz
+                    {displayName}
                   </div>
                   <div
                     style={{ fontSize: 10, color: "rgba(255,255,255,0.35)" }}
@@ -4114,71 +4068,7 @@ export default function AdminDashboard() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                background: paused
-                  ? "rgba(245,158,11,0.15)"
-                  : "rgba(34,197,94,0.12)",
-                border: `1px solid ${
-                  paused ? "rgba(245,158,11,0.3)" : "rgba(34,197,94,0.25)"
-                }`,
-                borderRadius: 99,
-                padding: "5px 12px",
-              }}
-            >
-              {paused ? (
-                <PauseCircle size={12} color="#f59e0b" />
-              ) : (
-                <div
-                  style={{
-                    width: 7,
-                    height: 7,
-                    borderRadius: "50%",
-                    background: "#22c55e",
-                  }}
-                />
-              )}
-              <span
-                style={{
-                  fontSize: 11,
-                  color: paused ? "#fbbf24" : "#4ade80",
-                  fontWeight: 600,
-                }}
-              >
-                {paused ? "QUEUE PAUSED" : "SYSTEM LIVE"}
-              </span>
-            </div>
-            <div
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 10,
-                background: "rgba(255,255,255,0.05)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                cursor: "pointer",
-                position: "relative",
-              }}
-            >
-              <Bell size={15} color="rgba(255,255,255,0.6)" />
-              <div
-                style={{
-                  position: "absolute",
-                  top: 7,
-                  right: 7,
-                  width: 7,
-                  height: 7,
-                  borderRadius: "50%",
-                  background: "#ef4444",
-                  border: "1.5px solid #0d1526",
-                }}
-              />
-            </div>
-            <div
+              onClick={handleLogout}
               style={{
                 width: 36,
                 height: 36,
@@ -4190,6 +4080,7 @@ export default function AdminDashboard() {
                 justifyContent: "center",
                 cursor: "pointer",
               }}
+              title="Log Out"
             >
               <LogOut size={15} color="rgba(255,255,255,0.6)" />
             </div>
