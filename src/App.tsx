@@ -45,6 +45,9 @@ import {
   CheckCheck,
   RotateCw,
   Cpu,
+  DoorOpen,
+  DoorClosed,
+  Scissors,
 } from "lucide-react";
 
 // ─── PROGRAM CONSTANTS ────────────────────────────────────────────────────────
@@ -172,6 +175,8 @@ const CSS = `
   .settings-row:hover { background:rgba(255,255,255,0.03); }
   .save-toast { animation:toastIn 0.35s cubic-bezier(.22,.68,0,1.2) forwards; }
   @keyframes toastIn { from{opacity:0;transform:translateY(8px) scale(0.96);}to{opacity:1;transform:translateY(0) scale(1);} }
+  .win-opt-btn { transition: all 0.18s ease; cursor: pointer; }
+  .win-opt-btn:hover { filter: brightness(1.12); transform: translateY(-1px); }
 `;
 
 // ─── SMALL ATOMS ─────────────────────────────────────────────────────────────
@@ -243,6 +248,37 @@ const H_CFG = {
   },
 };
 
+// ─── WINDOW STATUS CONFIG ────────────────────────────────────────────────────
+const WIN_STATUS_CFG = {
+  open: {
+    label: "Open",
+    color: "#4ade80",
+    bg: "rgba(34,197,94,0.18)",
+    border: "rgba(34,197,94,0.4)",
+    activeBg: "rgba(34,197,94,0.22)",
+    activeBorder: "rgba(34,197,94,0.7)",
+    dotColor: "#22c55e",
+  },
+  cutoff: {
+    label: "Cut-off",
+    color: "#fbbf24",
+    bg: "rgba(251,191,36,0.14)",
+    border: "rgba(251,191,36,0.35)",
+    activeBg: "rgba(251,191,36,0.2)",
+    activeBorder: "rgba(251,191,36,0.65)",
+    dotColor: "#f59e0b",
+  },
+  closed: {
+    label: "Closed",
+    color: "#f87171",
+    bg: "rgba(239,68,68,0.12)",
+    border: "rgba(239,68,68,0.3)",
+    activeBg: "rgba(239,68,68,0.18)",
+    activeBorder: "rgba(239,68,68,0.6)",
+    dotColor: "#ef4444",
+  },
+};
+
 // ╔═══════════════════════════════════════════════════════════╗
 // ║  MAIN COMPONENT                                          ║
 // ╚═══════════════════════════════════════════════════════════╝
@@ -264,6 +300,12 @@ export default function AdminDashboard() {
   const [flash, setFlash] = useState(false);
   const [recallPing, setRecallPing] = useState(false);
   const [removeId, setRemoveId] = useState(null);
+
+  // ── Window Status State ──────────────────────────────────
+  const [cashierStatus, setCashierStatus] = useState("open");
+  const [registrarStatus, setRegistrarStatus] = useState("open");
+  const [windowStatusSaving, setWindowStatusSaving] = useState(false);
+
   // Live Queue filters
   const [lqSearch, setLqSearch] = useState("");
   const [lqProgram, setLqProgram] = useState("all");
@@ -399,7 +441,7 @@ export default function AdminDashboard() {
     id: row.id, // keep the Supabase PK for future updates
   });
 
-  // ── Fetch initial waiting tickets from Supabase ────────────
+  // ── Fetch initial waiting tickets + window_status from Supabase ─
   useEffect(() => {
     const fetchQueue = async () => {
       const { data, error } = await supabase
@@ -416,7 +458,26 @@ export default function AdminDashboard() {
       setQueue((data || []).map(rowToQueueItem));
     };
 
+    const fetchWindowStatus = async () => {
+      const { data, error } = await supabase
+        .from("window_status")
+        .select("cashier_status, registrar_status")
+        .eq("id", 1)
+        .single();
+
+      if (error) {
+        console.error("Error fetching window_status:", error.message);
+        return;
+      }
+
+      if (data) {
+        setCashierStatus(data.cashier_status || "open");
+        setRegistrarStatus(data.registrar_status || "open");
+      }
+    };
+
     fetchQueue();
+    fetchWindowStatus();
   }, []);
 
   // ── Realtime subscription: listen for new INSERTs ─────────
@@ -442,6 +503,34 @@ export default function AdminDashboard() {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  // ── Update window status in Supabase ─────────────────────
+  const updateWindowStatus = async (dept, newStatus) => {
+    setWindowStatusSaving(true);
+
+    // Optimistically update local state first
+    if (dept === "cashier") setCashierStatus(newStatus);
+    else setRegistrarStatus(newStatus);
+
+    const updatePayload =
+      dept === "cashier"
+        ? { cashier_status: newStatus }
+        : { registrar_status: newStatus };
+
+    const { error } = await supabase
+      .from("window_status")
+      .update(updatePayload)
+      .eq("id", 1);
+
+    if (error) {
+      console.error("Error updating window status:", error.message);
+      // Revert on failure
+      if (dept === "cashier") setCashierStatus(cashierStatus);
+      else setRegistrarStatus(registrarStatus);
+    }
+
+    setWindowStatusSaving(false);
+  };
 
   // ── Core queue actions (all use sGrace, no GRACE_SECONDS) ─
   const startGrace = () => {
@@ -867,6 +956,198 @@ export default function AdminDashboard() {
     );
   };
 
+  // ── Window Operations card sub-component ─────────────────
+  const WindowOperationsCard = () => {
+    const windows = [
+      {
+        key: "cashier",
+        label: "Cashier Window",
+        status: cashierStatus,
+      },
+      {
+        key: "registrar",
+        label: "Registrar Window",
+        status: registrarStatus,
+      },
+    ];
+
+    return (
+      <div
+        className="fade-in"
+        style={{
+          background: "rgba(15,25,54,0.8)",
+          border: "1px solid rgba(255,255,255,0.08)",
+          borderRadius: 20,
+          padding: "20px",
+          marginBottom: 16,
+          animationDelay: "0.05s",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 16,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <DoorOpen size={14} color="#a78bfa" />
+            <span
+              style={{
+                fontSize: 11,
+                color: "rgba(255,255,255,0.35)",
+                fontWeight: 700,
+                letterSpacing: "0.08em",
+              }}
+            >
+              WINDOW OPERATIONS
+            </span>
+          </div>
+          {windowStatusSaving && (
+            <span
+              style={{
+                fontSize: 10,
+                color: "rgba(255,255,255,0.3)",
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+                fontStyle: "italic",
+              }}
+            >
+              <div
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  border: "1.5px solid rgba(255,255,255,0.3)",
+                  borderTop: "1.5px solid white",
+                  animation: "spin 0.7s linear infinite",
+                }}
+              />
+              Saving…
+            </span>
+          )}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {windows.map(({ key, label, status }) => {
+            const activeCfg = WIN_STATUS_CFG[status];
+            return (
+              <div
+                key={key}
+                style={{
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.07)",
+                  borderRadius: 14,
+                  padding: "14px 16px",
+                }}
+              >
+                {/* Window label + current status pill */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    marginBottom: 12,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "rgba(255,255,255,0.75)",
+                      letterSpacing: "-0.01em",
+                    }}
+                  >
+                    {label}
+                  </span>
+                  <span
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 5,
+                      background: activeCfg.bg,
+                      border: `1px solid ${activeCfg.border}`,
+                      borderRadius: 99,
+                      padding: "3px 10px",
+                      fontSize: 10,
+                      fontWeight: 700,
+                      color: activeCfg.color,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 5,
+                        height: 5,
+                        borderRadius: "50%",
+                        background: activeCfg.dotColor,
+                      }}
+                    />
+                    {activeCfg.label.toUpperCase()}
+                  </span>
+                </div>
+
+                {/* Three-option button group */}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr 1fr",
+                    gap: 6,
+                  }}
+                >
+                  {(["open", "cutoff", "closed"]).map((opt) => {
+                    const cfg = WIN_STATUS_CFG[opt];
+                    const isActive = status === opt;
+                    const icons = {
+                      open: DoorOpen,
+                      cutoff: Scissors,
+                      closed: DoorClosed,
+                    };
+                    const Icon = icons[opt];
+                    return (
+                      <button
+                        key={opt}
+                        className="win-opt-btn"
+                        onClick={() => updateWindowStatus(key, opt)}
+                        style={{
+                          padding: "9px 4px",
+                          borderRadius: 10,
+                          border: isActive
+                            ? `1.5px solid ${cfg.activeBorder}`
+                            : "1.5px solid rgba(255,255,255,0.07)",
+                          background: isActive
+                            ? cfg.activeBg
+                            : "rgba(255,255,255,0.03)",
+                          color: isActive ? cfg.color : "rgba(255,255,255,0.3)",
+                          fontSize: 11,
+                          fontWeight: isActive ? 700 : 500,
+                          cursor: "pointer",
+                          fontFamily: "'Outfit',sans-serif",
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          gap: 4,
+                          boxShadow: isActive
+                            ? `0 0 12px ${cfg.bg}`
+                            : "none",
+                          transition: "all 0.18s ease",
+                        }}
+                      >
+                        <Icon size={13} />
+                        {cfg.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   // ╔═══════════════════════════════════════════════════════════╗
   // ║  renderDashboard                                         ║
   // ╚═══════════════════════════════════════════════════════════╝
@@ -967,6 +1248,9 @@ export default function AdminDashboard() {
           </div>
         ))}
       </div>
+
+      {/* ── Window Operations Card ── */}
+      <WindowOperationsCard />
 
       {/* Now Serving + Controls */}
       <div
@@ -2044,7 +2328,8 @@ export default function AdminDashboard() {
                       style={{
                         fontFamily: "'Space Mono',monospace",
                         fontSize: 12,
-                        color: pos === 1 ? "#60a5fa" : "rgba(255,255,255,0.22)",
+                        color:
+                          pos === 1 ? "#60a5fa" : "rgba(255,255,255,0.22)",
                         fontWeight: 700,
                       }}
                     >
@@ -2224,7 +2509,6 @@ export default function AdminDashboard() {
       })
       .sort((a, b) => {
         let cmp = 0;
-        // Use the new database column names, and add || "" so empty cells never crash the app
         if (hSortCol === "name") {
           cmp = (a.student_name || "").localeCompare(b.student_name || "");
         }
