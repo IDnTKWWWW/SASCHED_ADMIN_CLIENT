@@ -208,7 +208,7 @@ export default function AdminLogin({ onLogin }) {
               letterSpacing: "0.04em",
             }}
           >
-            STI Calamba · MIS
+            SASCHED · Admin
           </div>
         </div>
 

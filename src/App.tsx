@@ -63,7 +63,7 @@ const TERTIARY_PROGRAMS = ["BSIT", "BSCpE", "BSBA", "BSHM", "BMMA", "BSTM"];
 const INITIAL_SERVING = {
   ticket: "A-047",
   name: "Maria Santos",
-  course: "BSIT",
+  service_type: "General",
   time: "9:00 AM",
   type: "booked",
   calledAt: null,
@@ -73,7 +73,7 @@ const HISTORY_LOG = [
   {
     ticket: "A-044",
     name: "Felix Aquino",
-    course: "BSCpE",
+    service_type: "General",
     status: "served",
     time: "8:42 AM",
     duration: "4 min",
@@ -81,7 +81,7 @@ const HISTORY_LOG = [
   {
     ticket: "A-045",
     name: "Grace Tolentino",
-    course: "STEM",
+    service_type: "General",
     status: "noshow",
     time: "8:51 AM",
     duration: "—",
@@ -89,7 +89,7 @@ const HISTORY_LOG = [
   {
     ticket: "A-046",
     name: "Sam Ocampo",
-    course: "BSBA",
+    service_type: "General",
     status: "served",
     time: "8:59 AM",
     duration: "6 min",
@@ -97,7 +97,7 @@ const HISTORY_LOG = [
   {
     ticket: "W-001",
     name: "Dina Flores",
-    course: "BSHM",
+    service_type: "General",
     status: "served",
     time: "9:04 AM",
     duration: "5 min",
@@ -106,7 +106,7 @@ const HISTORY_LOG = [
   {
     ticket: "A-043",
     name: "Nico Herrera",
-    course: "ABM",
+    service_type: "General",
     status: "removed",
     time: "8:38 AM",
     duration: "—",
@@ -115,11 +115,11 @@ const HISTORY_LOG = [
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 let walkInCounter = 3;
-function makeWalkIn(name, course) {
+function makeWalkIn(name, service_type) {
   return {
     ticket: `W-${String(walkInCounter++).padStart(3, "0")}`,
-    name: name || "Walk-in Student",
-    course: course || "Unspecified",
+    name: name || "Walk-in User",
+    service_type: service_type || "General",
     time: new Date().toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit",
@@ -202,8 +202,8 @@ function TypeBadge({ type }) {
   );
 }
 
-function LevelBadge({ course }) {
-  const isSHS = SHS_PROGRAMS.includes(course);
+function LevelBadge({ service_type }) {
+  const isSHS = SHS_PROGRAMS.includes(service_type);
   return (
     <span
       style={{
@@ -219,7 +219,7 @@ function LevelBadge({ course }) {
         whiteSpace: "nowrap",
       }}
     >
-      {isSHS ? "Senior High" : "College"}
+      {isSHS ? "SHS" : "Service"}
     </span>
   );
 }
@@ -370,7 +370,7 @@ export default function AdminDashboard() {
   // ── Auth: session gatekeeper ──────────────────────────────
   const [session, setSession] = useState(null);
   // --- USER DATA EXTRACTOR ---
-  const userEmail = session?.user?.email || "admin@sti.edu.ph";
+  const userEmail = session?.user?.email || "admin@sasched.io";
 
   // 1. Check Supabase for a saved name. If it's blank, fall back to the email trick.
   const savedName = session?.user?.user_metadata?.display_name;
@@ -432,8 +432,8 @@ export default function AdminDashboard() {
   // ── Helper: map a Supabase row → queue item shape ─────────
   const rowToQueueItem = (row, index) => ({
     ticket: row.ticket_number,
-    name: row.student_name,
-    course: row.course,
+    name: row.user_name,
+    service_type: row.service_type,
     time: row.appointment_time,
     type: row.booking_type === "walkin" ? "walkin" : "booked",
     department: row.department, // "Cashier" | "Registrar"
@@ -793,7 +793,7 @@ export default function AdminDashboard() {
                 marginBottom: 10,
               }}
             >
-              Student did not appear. Mark as No-Show or Recall.
+              User did not appear. Mark as No-Show or Recall.
             </div>
             <button
               onClick={markNoShow}
@@ -848,7 +848,7 @@ export default function AdminDashboard() {
               />
             </div>
             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
-              Student has {graceTime}s to reach the window
+              User has {graceTime}s to reach the window
             </div>
           </>
         ) : (
@@ -932,7 +932,7 @@ export default function AdminDashboard() {
               color: "rgba(255,255,255,0.85)",
             }}
           >
-            {h.student_name}
+            {h.user_name}
           </div>
           <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
             {h.appointment_time}
@@ -1382,7 +1382,7 @@ export default function AdminDashboard() {
                     flexWrap: "wrap",
                   }}
                 >
-                  <LevelBadge course={serving.course} />
+                  <LevelBadge service_type={serving.service_type} />
                   <TypeBadge type={serving.type} />
                   {serving.calledAt && (
                     <span
@@ -1417,7 +1417,7 @@ export default function AdminDashboard() {
                   fontWeight: 500,
                 }}
               >
-                No student at the window
+                No user at the window
               </div>
               <div
                 style={{
@@ -1595,7 +1595,7 @@ export default function AdminDashboard() {
                 fontFamily: "'Outfit',sans-serif",
               }}
             >
-              <UserPlus size={14} /> Add Walk-in Student
+              <UserPlus size={14} /> Add Walk-in User
             </button>
             {paused && (
               <div
@@ -1839,7 +1839,7 @@ export default function AdminDashboard() {
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {s.course}
+                    {s.service_type}
                   </div>
                   <TypeBadge type={s.type} />
                   <button
@@ -2255,7 +2255,7 @@ export default function AdminDashboard() {
               "Time Slot",
               "Level",
               "Type",
-              "Course",
+              "Service Type",
               "",
             ].map((h, i) => (
               <div
@@ -2288,7 +2288,7 @@ export default function AdminDashboard() {
                     fontWeight: 500,
                   }}
                 >
-                  No students match your filters
+                  No users match your filters
                 </div>
                 <button
                   onClick={clearFilters}
@@ -2365,9 +2365,9 @@ export default function AdminDashboard() {
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
                       }}
-                      title={s.course}
+                      title={s.service_type}
                     >
-                      {s.course}
+                      {s.service_type}
                     </div>
                     <div
                       style={{
@@ -2381,12 +2381,12 @@ export default function AdminDashboard() {
                       <Clock size={10} />
                       {s.time}
                     </div>
-                    <LevelBadge course={s.course} />
+                    <LevelBadge service_type={s.service_type} />
                     <TypeBadge type={s.type} />
                     <div
                       style={{ fontSize: 10, color: "rgba(255,255,255,0.3)" }}
                     >
-                      {SHS_PROGRAMS.includes(s.course) ? "SHS" : "Tertiary"}
+                      {SHS_PROGRAMS.includes(s.service_type) ? "SHS" : "General"}
                     </div>
                     <div
                       style={{ display: "flex", justifyContent: "flex-end" }}
@@ -2434,7 +2434,7 @@ export default function AdminDashboard() {
               <strong style={{ color: "rgba(255,255,255,0.6)" }}>
                 {queue.length}
               </strong>{" "}
-              students in queue
+              users in queue
             </span>
             <button
               className="ctrl-btn"
@@ -2497,20 +2497,20 @@ export default function AdminDashboard() {
       .filter((h) => {
         const q = hSearch.toLowerCase();
         const ms =
-          (h.student_name || "").toLowerCase().includes(q) ||
+          (h.user_name || "").toLowerCase().includes(q) ||
           (h.ticket_number || "").toLowerCase().includes(q) ||
-          (h.course || "").toLowerCase().includes(q);
+          (h.service_type || "").toLowerCase().includes(q);
         const mv = hStatus === "all" || h.status === hStatus;
         const ml =
           hLevel === "all" ||
-          (hLevel === "shs" && SHS_PROGRAMS.includes(h.course)) ||
-          (hLevel === "tertiary" && TERTIARY_PROGRAMS.includes(h.course));
+          (hLevel === "shs" && SHS_PROGRAMS.includes(h.service_type)) ||
+          (hLevel === "tertiary" && TERTIARY_PROGRAMS.includes(h.service_type));
         return ms && mv && ml;
       })
       .sort((a, b) => {
         let cmp = 0;
         if (hSortCol === "name") {
-          cmp = (a.student_name || "").localeCompare(b.student_name || "");
+          cmp = (a.user_name || "").localeCompare(b.user_name || "");
         }
         if (hSortCol === "ticket") {
           cmp = (a.ticket_number || "").localeCompare(b.ticket_number || "");
@@ -3081,7 +3081,7 @@ export default function AdminDashboard() {
               #
             </div>
             <SortTh col="ticket">TICKET</SortTh>
-            <SortTh col="name">STUDENT</SortTh>
+            <SortTh col="name">USER</SortTh>
             <div
               style={{
                 fontSize: 10,
@@ -3149,12 +3149,12 @@ export default function AdminDashboard() {
                         color: "rgba(255,255,255,0.9)",
                       }}
                     >
-                      {log.student_name}
+                      {log.user_name}
                     </div>
                     <div
                       style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}
                     >
-                      {log.course}
+                      {log.service_type}
                     </div>
                   </div>
                   <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)" }}>
@@ -3569,11 +3569,11 @@ export default function AdminDashboard() {
             iconBg="rgba(59,130,246,0.12)"
             iconBorder="rgba(59,130,246,0.25)"
             title="Queue Configuration"
-            subtitle="Control how the live queue behaves during enrollment sessions"
+            subtitle="Control how the live queue behaves during appointment sessions"
           >
             <SettingRow
               label="Grace Period Duration"
-              hint="Time a student has to reach the window after being called before being flagged as absent."
+              hint="Time a user has to reach the window after being called before being flagged as absent."
             >
               <NumInput
                 value={sGrace}
@@ -3601,19 +3601,19 @@ export default function AdminDashboard() {
             </SettingRow>
             <SettingRow
               label="Maximum Queue Capacity"
-              hint="Students will be prevented from booking once this limit is reached."
+              hint="Users will be prevented from booking once this limit is reached."
             >
               <NumInput
                 value={sMaxQueue}
                 onChange={setSMaxQueue}
                 min={10}
                 max={200}
-                unit="students"
+                unit="users"
               />
             </SettingRow>
             <SettingRow
               label="Auto-Advance After No-Show"
-              hint="Automatically call the next student once a no-show is confirmed, without manual intervention."
+              hint="Automatically call the next user once a no-show is confirmed, without manual intervention."
               noBorder
             >
               <Toggle value={sAutoAdvance} onChange={setSAutoAdvance} />
@@ -3633,7 +3633,7 @@ export default function AdminDashboard() {
               label="Physical Paper Ticket Printer"
               hint={
                 <span>
-                  Prints a paper ticket stub when a walk-in student is added to
+                  Prints a paper ticket stub when a walk-in user is added to
                   the queue.
                   {!sPrinter && (
                     <span
@@ -3708,7 +3708,7 @@ export default function AdminDashboard() {
                       marginTop: 3,
                     }}
                   >
-                    Registrar · STI Calamba
+                    Registrar · SASCHED Platform
                   </div>
                   <div
                     style={{
@@ -4161,7 +4161,7 @@ export default function AdminDashboard() {
                   whiteSpace: "nowrap",
                 }}
               >
-                STI Calamba
+                SASCHED Platform
               </div>
             </div>
           )}
@@ -4423,7 +4423,7 @@ export default function AdminDashboard() {
                     letterSpacing: "-0.01em",
                   }}
                 >
-                  Add Walk-in Student
+                  Add Walk-in User
                 </div>
                 <div
                   style={{
@@ -4432,7 +4432,7 @@ export default function AdminDashboard() {
                     marginTop: 2,
                   }}
                 >
-                  Insert student directly into the queue
+                  Insert user directly into the queue
                 </div>
               </div>
               <button
@@ -4492,7 +4492,7 @@ export default function AdminDashboard() {
                   letterSpacing: "0.06em",
                 }}
               >
-                PROGRAM / COURSE
+                SERVICE TYPE
               </label>
               <div style={{ position: "relative" }}>
                 <select
