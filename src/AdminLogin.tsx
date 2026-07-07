@@ -1,22 +1,68 @@
-// @ts-nocheck
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { User, Lock, Eye, EyeOff, LogIn } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import myLogo from "./Asset/SAS-logo.png";
 import bgImage from "./Asset/admin-bg.png";
 
-export default function AdminLogin({ onLogin }) {
+export default function AdminLogin({ onLogin }: { onLogin: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [focused, setFocused] = useState(null); // "email" | "password"
-  const [error, setError] = useState(null);
+  const [focused, setFocused] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleLogin = async (e) => {
+  // ── GAP 4: Brute-force lockout ──────────────────────────────
+  const [attempts, setAttempts] = useState(0);
+  const [lockedUntil, setLockedUntil] = useState<number | null>(null);
+  const [lockCountdown, setLockCountdown] = useState(0);
+
+  // Tick the lockout countdown every second
+  useEffect(() => {
+    if (!lockedUntil) return;
+    const tick = setInterval(() => {
+      const remaining = Math.ceil((lockedUntil - Date.now()) / 1000);
+      if (remaining <= 0) {
+        setLockedUntil(null);
+        setAttempts(0);
+        setLockCountdown(0);
+        clearInterval(tick);
+      } else {
+        setLockCountdown(remaining);
+      }
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [lockedUntil]);
+
+  const isLocked = !!lockedUntil && Date.now() < lockedUntil;
+
+  // ── GAP 5: Forgot-password mode ──────────────────────────────
+  const [showReset, setShowReset] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetSent, setResetSent] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+
+  const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
+    setResetLoading(true);
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+      resetEmail,
+      { redirectTo: window.location.origin }
+    );
+    setResetLoading(false);
+    if (resetError) {
+      setError(resetError.message);
+    } else {
+      setResetSent(true);
+      setError(null);
+    }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isLocked) return;
     setIsLoading(true);
-    setError(null); // clear any previous error before trying
+    setError(null);
 
     const { error: authError } = await supabase.auth.signInWithPassword({
       email,
@@ -24,12 +70,21 @@ export default function AdminLogin({ onLogin }) {
     });
 
     if (authError) {
-      setError(authError.message);
+      const newAttempts = attempts + 1;
+      setAttempts(newAttempts);
+      if (newAttempts >= 5) {
+        setLockedUntil(Date.now() + 60_000);
+        setError("Too many failed attempts. Please wait 60 seconds.");
+      } else {
+        setError(`${authError.message} (${5 - newAttempts} attempt${5 - newAttempts === 1 ? "" : "s"} remaining)`);
+      }
       setIsLoading(false);
       return;
     }
 
-    // Success — tell App.tsx to unlock the dashboard
+    // Success — reset counters and unlock
+    setAttempts(0);
+    setLockedUntil(null);
     setIsLoading(false);
     onLogin();
   };
@@ -336,10 +391,18 @@ export default function AdminLogin({ onLogin }) {
             </div>
           )}
 
-          {/* Login button */}
           <div className="stagger-4" style={{ marginTop: 6 }}>
-            <button type="submit" className="btn-login" disabled={isLoading}>
-              {isLoading ? (
+            <button
+              type="submit"
+              className="btn-login"
+              disabled={isLoading || isLocked}
+            >
+              {isLocked ? (
+                <>
+                  <div className="spinner" />
+                  <span>Locked — {lockCountdown}s</span>
+                </>
+              ) : isLoading ? (
                 <>
                   <div className="spinner" /> <span>Authenticating…</span>
                 </>
@@ -355,15 +418,76 @@ export default function AdminLogin({ onLogin }) {
         {/* Divider */}
         <div className="divider stagger-5" />
 
-        {/* Forgot Password */}
+        {/* Forgot Password — GAP 5 fix: real reset flow */}
         <div className="stagger-5">
-          <button
-            type="button"
-            className="btn-forgot"
-            onClick={() => console.log("Forgot password clicked")}
-          >
-            Forgot Password
-          </button>
+          {!showReset ? (
+            <button
+              type="button"
+              className="btn-forgot"
+              onClick={() => { setShowReset(true); setResetSent(false); setError(null); }}
+            >
+              Forgot Password
+            </button>
+          ) : resetSent ? (
+            <div
+              style={{
+                background: "rgba(34,197,94,0.1)",
+                border: "1px solid rgba(34,197,94,0.3)",
+                borderRadius: 12,
+                padding: "14px 16px",
+                textAlign: "center",
+                fontFamily: "'Outfit',sans-serif",
+                fontSize: 13,
+                color: "#86efac",
+              }}
+            >
+              ✓ Check your inbox — a reset link has been sent.
+              <button
+                type="button"
+                onClick={() => { setShowReset(false); setResetSent(false); setResetEmail(""); }}
+                style={{ display: "block", margin: "8px auto 0", background: "none", border: "none", color: "rgba(255,255,255,0.4)", fontSize: 11, cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}
+              >
+                Back to login
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handleReset} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div
+                className={`input-wrap ${focused === "reset-email" ? "focused" : ""}`}
+                onClick={() => document.getElementById("reset-email")?.focus()}
+              >
+                <User size={20} color="#1e3a8a" strokeWidth={2} style={{ flexShrink: 0 }} />
+                <input
+                  id="reset-email"
+                  type="email"
+                  placeholder="Enter your admin email"
+                  value={resetEmail}
+                  onChange={(e) => setResetEmail(e.target.value)}
+                  onFocus={() => setFocused("reset-email")}
+                  onBlur={() => setFocused(null)}
+                  required
+                />
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  type="button"
+                  className="btn-forgot"
+                  onClick={() => { setShowReset(false); setError(null); }}
+                  style={{ flex: 1 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn-login"
+                  disabled={resetLoading || !resetEmail}
+                  style={{ flex: 2, height: 48, fontSize: 14 }}
+                >
+                  {resetLoading ? <div className="spinner" /> : "Send Reset Link"}
+                </button>
+              </div>
+            </form>
+          )}
         </div>
 
         {/* Footer note */}

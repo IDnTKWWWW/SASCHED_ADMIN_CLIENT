@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabaseClient";
 import AdminLogin from "./AdminLogin";
@@ -50,14 +50,8 @@ import {
   Scissors,
 } from "lucide-react";
 
-// ─── PROGRAM CONSTANTS ────────────────────────────────────────────────────────
-const SHS_PROGRAMS = [
-  "ABM",
-  "STEM",
-  "IT in Mobile App and Web Development",
-  "Culinary Arts",
-];
-const TERTIARY_PROGRAMS = ["BSIT", "BSCpE", "BSBA", "BSHM", "BMMA", "BSTM"];
+// ─── PURPOSE OPTIONS ─────────────────────────────────────────────────────────
+const PURPOSE_OPTIONS = ["General", "Premium Support", "Consultation", "Billing"];
 
 // ─── DUMMY DATA (queue is now live from Supabase) ─────────────────────────────
 const INITIAL_SERVING = {
@@ -202,8 +196,7 @@ function TypeBadge({ type }) {
   );
 }
 
-function LevelBadge({ service_type }) {
-  const isSHS = SHS_PROGRAMS.includes(service_type);
+function LevelBadge({ service_type }: { service_type: string }) {
   return (
     <span
       style={{
@@ -211,15 +204,13 @@ function LevelBadge({ service_type }) {
         fontWeight: 700,
         borderRadius: 6,
         padding: "3px 9px",
-        background: isSHS ? "rgba(251,191,36,0.1)" : "rgba(129,140,248,0.12)",
-        color: isSHS ? "#fbbf24" : "#818cf8",
-        border: `1px solid ${
-          isSHS ? "rgba(251,191,36,0.2)" : "rgba(129,140,248,0.25)"
-        }`,
+        background: "rgba(129,140,248,0.12)",
+        color: "#818cf8",
+        border: "1px solid rgba(129,140,248,0.25)",
         whiteSpace: "nowrap",
       }}
     >
-      {isSHS ? "SHS" : "Service"}
+      {service_type || "General"}
     </span>
   );
 }
@@ -296,7 +287,7 @@ export default function AdminDashboard() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [walkInModal, setWalkInModal] = useState(false);
   const [walkInName, setWalkInName] = useState("");
-  const [walkInCourse, setWalkInCourse] = useState("");
+  const [walkInPurpose, setWalkInPurpose] = useState("");
   const [flash, setFlash] = useState(false);
   const [recallPing, setRecallPing] = useState(false);
   const [removeId, setRemoveId] = useState(null);
@@ -368,20 +359,12 @@ export default function AdminDashboard() {
   }, [activeNav]);
 
   // ── Auth: session gatekeeper ──────────────────────────────
-  const [session, setSession] = useState(null);
-  // --- USER DATA EXTRACTOR ---
-  const userEmail = session?.user?.email || "admin@sasched.io";
-
-  // 1. Check Supabase for a saved name. If it's blank, fall back to the email trick.
-  const savedName = session?.user?.user_metadata?.display_name;
-  const rawName = savedName || userEmail.split("@")[0];
-
-  // 2. Capitalize the first letter
-  const displayName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
-
-  // 3. Get initials for the avatar
+  const [session, setSession] = useState<any>(null);
+  // ── Admin identity (immutable session data only) ──────────
+  const displayName: string =
+    ((session?.user?.user_metadata?.display_name as string | undefined) ?? "").trim() || "Admin";
+  const userEmail: string = session?.user?.email ?? "admin@sasched.io";
   const initials = displayName.substring(0, 2).toUpperCase();
-  // ---------------------------
 
   const [authReady, setAuthReady] = useState(false);
 
@@ -451,7 +434,7 @@ export default function AdminDashboard() {
         .order("created_at", { ascending: true });
 
       if (error) {
-        console.error("Error fetching queue:", error.message);
+        if (import.meta.env.DEV) console.warn("[DEV] Error fetching queue:", error.message);
         return;
       }
 
@@ -466,7 +449,7 @@ export default function AdminDashboard() {
         .single();
 
       if (error) {
-        console.error("Error fetching window_status:", error.message);
+        if (import.meta.env.DEV) console.warn("[DEV] Error fetching window_status:", error.message);
         return;
       }
 
@@ -523,7 +506,7 @@ export default function AdminDashboard() {
       .eq("id", 1);
 
     if (error) {
-      console.error("Error updating window status:", error.message);
+      if (import.meta.env.DEV) console.warn("[DEV] Error updating window status:", error.message);
       // Revert on failure
       if (dept === "cashier") setCashierStatus(cashierStatus);
       else setRegistrarStatus(registrarStatus);
@@ -559,7 +542,7 @@ export default function AdminDashboard() {
         .update({ status: "served" })
         .eq("ticket_number", serving.ticket);
       if (servedError)
-        console.error("Error marking served:", servedError.message);
+        if (import.meta.env.DEV) console.warn("[DEV] Error marking served:", servedError.message);
     }
 
     // 2. If no more tickets for this window, just clear the terminal
@@ -577,7 +560,7 @@ export default function AdminDashboard() {
       .update({ status: "serving" })
       .eq("ticket_number", next.ticket);
     if (servingError)
-      console.error("Error marking serving:", servingError.message);
+      if (import.meta.env.DEV) console.warn("[DEV] Error marking serving:", servingError.message);
 
     setServing({ ...next, calledAt: nowStr });
     // Remove only this ticket from the master queue; others departments stay
@@ -603,7 +586,7 @@ export default function AdminDashboard() {
       .from("queue_tickets")
       .update({ status: "noshow" })
       .eq("ticket_number", serving.ticket);
-    if (error) console.error("Error marking no-show:", error.message);
+    if (error && import.meta.env.DEV) console.warn("[DEV] Error marking no-show:", error.message);
 
     // Update local state
     setHistory((h) =>
@@ -634,7 +617,7 @@ export default function AdminDashboard() {
       .from("queue_tickets")
       .update({ status: "removed" })
       .eq("ticket_number", ticket);
-    if (error) console.error("Error removing from queue:", error.message);
+    if (error && import.meta.env.DEV) console.warn("[DEV] Error removing from queue:", error.message);
 
     // Animate removal then update local state
     setRemoveId(ticket);
@@ -651,11 +634,32 @@ export default function AdminDashboard() {
     }, 350);
   };
 
-  const addWalkIn = () => {
+  const addWalkIn = async () => {
     if (!walkInName) return;
-    setQueue((q) => [...q, makeWalkIn(walkInName, walkInCourse)]);
+    // GAP 2 FIX: Persist walk-in to Supabase so it survives refresh and appears in history
+    const ticketNum = `W-${String(walkInCounter++).padStart(3, "0")}`;
+    const now = new Date();
+    const apptTime = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const { data, error } = await supabase
+      .from("queue_tickets")
+      .insert([{
+        ticket_number: ticketNum,
+        user_name: walkInName,
+        service_type: walkInPurpose || "General",
+        booking_type: "walkin",
+        status: "waiting",
+        department: activeDepartment,
+        appointment_time: apptTime,
+      }])
+      .select()
+      .single();
+    if (error) {
+      if (import.meta.env.DEV) console.warn("[DEV] Walk-in insert error:", error.message);
+      return;
+    }
+    setQueue((q) => [...q, rowToQueueItem(data, q.length)]);
     setWalkInName("");
-    setWalkInCourse("");
+    setWalkInPurpose("");
     setWalkInModal(false);
   };
 
@@ -1940,10 +1944,11 @@ export default function AdminDashboard() {
         return a.eta - b.eta;
       });
 
-    const shsCnt = queue.filter((s) => SHS_PROGRAMS.includes(s.course)).length;
-    const colCnt = queue.filter((s) =>
-      TERTIARY_PROGRAMS.includes(s.course)
-    ).length;
+    // Count by purpose type
+    const purposeCounts = PURPOSE_OPTIONS.reduce((acc, p) => {
+      acc[p] = queue.filter((s) => s.service_type === p).length;
+      return acc;
+    }, {} as Record<string, number>);
     const walkCnt = queue.filter((s) => s.type === "walkin").length;
     const clearFilters = () => {
       setLqSearch("");
@@ -2099,21 +2104,10 @@ export default function AdminDashboard() {
                   minWidth: 190,
                 }}
               >
-                <option value="all">All Programs</option>
-                <optgroup label="── Senior High School">
-                  {SHS_PROGRAMS.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                </optgroup>
-                <optgroup label="── Tertiary / College">
-                  {TERTIARY_PROGRAMS.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                </optgroup>
+                <option value="all">All Purposes</option>
+                {PURPOSE_OPTIONS.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
               </select>
               <ChevronDownIcon
                 size={12}
@@ -2251,11 +2245,11 @@ export default function AdminDashboard() {
               "#",
               "Ticket",
               "Name",
-              "Program",
+              "Purpose",
               "Time Slot",
-              "Level",
+              "Purpose Type",
               "Type",
-              "Service Type",
+              "Window",
               "",
             ].map((h, i) => (
               <div
@@ -2386,7 +2380,7 @@ export default function AdminDashboard() {
                     <div
                       style={{ fontSize: 10, color: "rgba(255,255,255,0.3)" }}
                     >
-                      {SHS_PROGRAMS.includes(s.service_type) ? "SHS" : "General"}
+                      {s.service_type || "General"}
                     </div>
                     <div
                       style={{ display: "flex", justifyContent: "flex-end" }}
@@ -2503,7 +2497,7 @@ export default function AdminDashboard() {
         const mv = hStatus === "all" || h.status === hStatus;
         const ml =
           hLevel === "all" ||
-          (hLevel === "shs" && SHS_PROGRAMS.includes(h.service_type)) ||
+          (hLevel === "shs" && h.service_type === "General") ||
           (hLevel === "tertiary" && TERTIARY_PROGRAMS.includes(h.service_type));
         return ms && mv && ml;
       })
@@ -4089,6 +4083,34 @@ export default function AdminDashboard() {
     // onLogin is a no-op: onAuthStateChange handles the state update automatically
   }
 
+  // ── GAP 1 FIX: Role guard — only users with app_metadata.role === "admin" may proceed ──
+  // Set this in Supabase Dashboard → Auth → Users → Edit → app_metadata: { "role": "admin" }
+  const isAdmin = session.user?.app_metadata?.role === "admin";
+  if (!isAdmin) {
+    supabase.auth.signOut();
+    return (
+      <div
+        style={{
+          width: "100vw",
+          height: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#0d1526",
+          gap: 16,
+          fontFamily: "'Outfit',sans-serif",
+        }}
+      >
+        <ShieldAlert size={48} color="#f87171" />
+        <div style={{ fontSize: 22, fontWeight: 800, color: "white" }}>Unauthorized</div>
+        <div style={{ fontSize: 14, color: "rgba(255,255,255,0.5)", textAlign: "center", maxWidth: 320 }}>
+          You do not have admin privileges. This session has been signed out.
+        </div>
+      </div>
+    );
+  }
+
   // ╔═══════════════════════════════════════════════════════════╗
   // ║  ROOT RENDER  (session confirmed)                        ║
   // ╚═══════════════════════════════════════════════════════════╝
@@ -4496,35 +4518,24 @@ export default function AdminDashboard() {
               </label>
               <div style={{ position: "relative" }}>
                 <select
-                  value={walkInCourse}
-                  onChange={(e) => setWalkInCourse(e.target.value)}
+                  value={walkInPurpose}
+                  onChange={(e) => setWalkInPurpose(e.target.value)}
                   style={{
                     width: "100%",
                     padding: "11px 32px 11px 14px",
                     borderRadius: 10,
                     border: "1px solid rgba(255,255,255,0.1)",
                     background: "rgba(15,25,60,0.95)",
-                    color: walkInCourse ? "white" : "rgba(255,255,255,0.3)",
+                    color: walkInPurpose ? "white" : "rgba(255,255,255,0.3)",
                     fontSize: 14,
                     fontFamily: "'Outfit',sans-serif",
                     appearance: "none",
                   }}
                 >
-                  <option value="">Select program…</option>
-                  <optgroup label="Senior High School">
-                    {SHS_PROGRAMS.map((p) => (
-                      <option key={p} value={p}>
-                        {p}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Tertiary / College">
-                    {TERTIARY_PROGRAMS.map((p) => (
-                      <option key={p} value={p}>
-                        {p}
-                      </option>
-                    ))}
-                  </optgroup>
+                  <option value="">Select purpose…</option>
+                  {PURPOSE_OPTIONS.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
                 </select>
                 <ChevronDown
                   size={13}
