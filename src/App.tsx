@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// Bug 1 fix: removed @ts-nocheck — all type errors corrected below
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabaseClient";
 import AdminLogin from "./AdminLogin";
@@ -7,9 +7,7 @@ import {
   Users,
   History,
   Settings,
-  GraduationCap,
   ChevronRight,
-  Bell,
   LogOut,
   UserPlus,
   SkipForward,
@@ -31,13 +29,10 @@ import {
   ArrowUpDown,
   Filter,
   BarChart2,
-  TimerReset,
-  Percent,
   AlertOctagon,
   MinusCircle,
   ChevronUp,
   ChevronDown as ChevronDownIcon,
-  Printer,
   User,
   KeyRound,
   ShieldCheck,
@@ -48,80 +43,45 @@ import {
   DoorOpen,
   DoorClosed,
   Scissors,
+  FileDown,
+  Trash2 as TrashIcon,
 } from "lucide-react";
 
 // ─── PURPOSE OPTIONS ─────────────────────────────────────────────────────────
 const PURPOSE_OPTIONS = ["General", "Premium Support", "Consultation", "Billing"];
+const TERTIARY_PROGRAMS = ["Premium Support", "Consultation", "Billing"];
 
-// ─── DUMMY DATA (queue is now live from Supabase) ─────────────────────────────
-const INITIAL_SERVING = {
-  ticket: "A-047",
-  name: "Maria Santos",
-  service_type: "General",
-  time: "9:00 AM",
-  type: "booked",
-  calledAt: null,
-};
-
-const HISTORY_LOG = [
-  {
-    ticket: "A-044",
-    name: "Felix Aquino",
-    service_type: "General",
-    status: "served",
-    time: "8:42 AM",
-    duration: "4 min",
-  },
-  {
-    ticket: "A-045",
-    name: "Grace Tolentino",
-    service_type: "General",
-    status: "noshow",
-    time: "8:51 AM",
-    duration: "—",
-  },
-  {
-    ticket: "A-046",
-    name: "Sam Ocampo",
-    service_type: "General",
-    status: "served",
-    time: "8:59 AM",
-    duration: "6 min",
-  },
-  {
-    ticket: "W-001",
-    name: "Dina Flores",
-    service_type: "General",
-    status: "served",
-    time: "9:04 AM",
-    duration: "5 min",
-    walkin: true,
-  },
-  {
-    ticket: "A-043",
-    name: "Nico Herrera",
-    service_type: "General",
-    status: "removed",
-    time: "8:38 AM",
-    duration: "—",
-  },
-];
-
-// ─── HELPERS ──────────────────────────────────────────────────────────────────
-let walkInCounter = 3;
-function makeWalkIn(name, service_type) {
-  return {
-    ticket: `W-${String(walkInCounter++).padStart(3, "0")}`,
-    name: name || "Walk-in User",
-    service_type: service_type || "General",
-    time: new Date().toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    }),
-    type: "walkin",
-    eta: 99,
-  };
+// ─── TYPE DEFINITIONS ─────────────────────────────────────────────────────────
+interface QueueItem {
+  ticket: string;
+  name: string;
+  service_type: string;
+  time: string;
+  type: string;
+  eta: number;
+  calledAt: string | null;
+  department: string;
 }
+interface HistoryItem {
+  ticket?: string;
+  ticket_number?: string;
+  name?: string;
+  user_name?: string;
+  service_type: string;
+  status: string;
+  time?: string;
+  appointment_time?: string;
+  duration?: string;
+  department?: string;
+  walkin?: boolean;
+  id?: string;
+  created_at?: string;
+}
+
+// ─── HELPERS ────────────────────────────────────────────────────────────────
+let walkInCounter = 3;
+// makeWalkIn is no longer used — walk-ins now insert directly into Supabase
+
 
 // ─── CSS ──────────────────────────────────────────────────────────────────────
 const CSS = `
@@ -174,7 +134,7 @@ const CSS = `
 `;
 
 // ─── SMALL ATOMS ─────────────────────────────────────────────────────────────
-function TypeBadge({ type }) {
+function TypeBadge({ type }: { type: string }) {
   const isWalk = type === "walkin";
   return (
     <span
@@ -215,29 +175,8 @@ function LevelBadge({ service_type }: { service_type: string }) {
   );
 }
 
-const H_CFG = {
-  served: {
-    color: "#4ade80",
-    bg: "rgba(34,197,94,0.1)",
-    border: "rgba(34,197,94,0.2)",
-    icon: CheckCircle2,
-    label: "Served",
-  },
-  noshow: {
-    color: "#f87171",
-    bg: "rgba(239,68,68,0.1)",
-    border: "rgba(239,68,68,0.2)",
-    icon: AlertOctagon,
-    label: "No-Show",
-  },
-  removed: {
-    color: "#94a3b8",
-    bg: "rgba(148,163,184,0.08)",
-    border: "rgba(148,163,184,0.15)",
-    icon: MinusCircle,
-    label: "Removed",
-  },
-};
+// H_CFG kept as reference for HistoryItem — actual styling is inline below
+type WinStatusKey = "open" | "cutoff" | "closed";
 
 // ─── WINDOW STATUS CONFIG ────────────────────────────────────────────────────
 const WIN_STATUS_CFG = {
@@ -275,9 +214,9 @@ const WIN_STATUS_CFG = {
 // ╚═══════════════════════════════════════════════════════════╝
 export default function AdminDashboard() {
   const [activeNav, setActiveNav] = useState("dashboard");
-  const [queue, setQueue] = useState([]);
-  const [serving, setServing] = useState(null);
-  const [history, setHistory] = useState([]);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [serving, setServing] = useState<QueueItem | null>(null);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
   const [paused, setPaused] = useState(false);
   const [graceActive, setGraceActive] = useState(false);
   const [graceTime, setGraceTime] = useState(15);
@@ -290,7 +229,23 @@ export default function AdminDashboard() {
   const [walkInPurpose, setWalkInPurpose] = useState("");
   const [flash, setFlash] = useState(false);
   const [recallPing, setRecallPing] = useState(false);
-  const [removeId, setRemoveId] = useState(null);
+  const [removeId, setRemoveId] = useState<string | null>(null);
+  // ── Remove confirm (Bug 6) ────────────────────────────────────
+  const [removeConfirmTicket, setRemoveConfirmTicket] = useState<string | null>(null);
+  // ── Logout two-step confirm (Bug 4) ──────────────────────────
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  // ── Clear queue confirm (Feature 1) ──────────────────────────
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [clearingQueue, setClearingQueue] = useState(false);
+  // ── Change-password modal state (Bug 3) ──────────────────────
+  const [pwCurrent, setPwCurrent] = useState("");
+  const [pwNew, setPwNew] = useState("");
+  const [pwConfirm, setPwConfirm] = useState("");
+  const [pwError, setPwError] = useState<string | null>(null);
+  const [pwSuccess, setPwSuccess] = useState(false);
+  const [pwLoading, setPwLoading] = useState(false);
+  // ── Walk-in department selector (Feature 4) ───────────────────
+  const [walkInDepartment, setWalkInDepartment] = useState("Cashier");
 
   // ── Window Status State ──────────────────────────────────
   const [cashierStatus, setCashierStatus] = useState("open");
@@ -308,12 +263,24 @@ export default function AdminDashboard() {
   const [hLevel, setHLevel] = useState("all");
   const [hSortCol, setHSortCol] = useState("time");
   const [hSortDir, setHSortDir] = useState("desc");
-  // Settings state
-  const [sGrace, setSGrace] = useState(15);
-  const [sWindow, setSWindow] = useState("1");
-  const [sPrinter, setSPrinter] = useState(false);
-  const [sMaxQueue, setSMaxQueue] = useState(50);
-  const [sAutoAdvance, setSAutoAdvance] = useState(false);
+  // ── Settings state — Bug 5 fix: load from localStorage on mount ──
+  const [sGrace, setSGrace] = useState<number>(() => {
+    const v = localStorage.getItem("admin_sGrace");
+    return v ? Number(v) : 15;
+  });
+  const [sWindow, setSWindow] = useState<string>(() =>
+    localStorage.getItem("admin_sWindow") ?? "1"
+  );
+  const [sPrinter, setSPrinter] = useState<boolean>(() =>
+    localStorage.getItem("admin_sPrinter") === "true"
+  );
+  const [sMaxQueue, setSMaxQueue] = useState<number>(() => {
+    const v = localStorage.getItem("admin_sMaxQueue");
+    return v ? Number(v) : 50;
+  });
+  const [sAutoAdvance, setSAutoAdvance] = useState<boolean>(() =>
+    localStorage.getItem("admin_sAutoAdvance") === "true"
+  );
   const [sPwModal, setSPwModal] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
 
@@ -388,19 +355,26 @@ export default function AdminDashboard() {
     // onAuthStateChange above sets session → null automatically
   };
 
-  const timerRef = useRef(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Bug 2 fix: guard so only ONE interval is ever running at a time
+  const graceStartedRef = useRef(false);
   const nowStr = new Date().toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
   });
 
-  // ── Grace countdown ───────────────────────────────────────
+  // ── Grace countdown — Bug 2 fix ──────────────────────────────
+  // Only create a new interval when grace becomes active AND one isn't
+  // already running. Toggling Pause/Resume no longer spawns duplicates.
   useEffect(() => {
-    if (graceActive && !paused) {
+    if (graceActive && !paused && !graceStartedRef.current) {
+      graceStartedRef.current = true;
       timerRef.current = setInterval(() => {
         setGraceTime((t) => {
           if (t <= 1) {
-            clearInterval(timerRef.current);
+            if (timerRef.current) clearInterval(timerRef.current);
+            timerRef.current = null;
+            graceStartedRef.current = false;
             setNoShowWarning(true);
             setGraceActive(false);
             return 0;
@@ -409,11 +383,25 @@ export default function AdminDashboard() {
         });
       }, 1000);
     }
-    return () => clearInterval(timerRef.current);
+    if (!graceActive || paused) {
+      if (timerRef.current && paused) {
+        // Pause: clear interval but keep graceStartedRef=true so resume works
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+        graceStartedRef.current = false; // allow restart when resumed
+      }
+    }
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+        graceStartedRef.current = false;
+      }
+    };
   }, [graceActive, paused]);
 
   // ── Helper: map a Supabase row → queue item shape ─────────
-  const rowToQueueItem = (row, index) => ({
+  const rowToQueueItem = (row: Record<string, string>, index: number): QueueItem => ({
     ticket: row.ticket_number,
     name: row.user_name,
     service_type: row.service_type,
@@ -421,8 +409,9 @@ export default function AdminDashboard() {
     type: row.booking_type === "walkin" ? "walkin" : "booked",
     department: row.department, // "Cashier" | "Registrar"
     eta: (index + 1) * 2,
+    calledAt: null, // not yet called
     id: row.id, // keep the Supabase PK for future updates
-  });
+  } as QueueItem);
 
   // ── Fetch initial waiting tickets + window_status from Supabase ─
   useEffect(() => {
@@ -463,21 +452,32 @@ export default function AdminDashboard() {
     fetchWindowStatus();
   }, []);
 
-  // ── Realtime subscription: listen for new INSERTs ─────────
+  // ── Realtime subscriptions: INSERT + UPDATE (Feature 3) ───
   useEffect(() => {
     const channel = supabase
-      .channel("queue_tickets_inserts")
+      .channel("queue_tickets_changes")
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "queue_tickets" },
         (payload) => {
-          const newRow = payload.new;
-          // Only add to the live queue if the inserted ticket is 'waiting'
+          const newRow = payload.new as Record<string, string>;
           if (newRow.status !== "waiting") return;
           setQueue((prev) => {
             const item = rowToQueueItem(newRow, prev.length);
             return [...prev, item];
           });
+        }
+      )
+      // Feature 3: remove cancelled/terminal tickets in real time
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "queue_tickets" },
+        (payload) => {
+          const updated = payload.new as Record<string, string>;
+          const terminal = ["cancelled", "served", "noshow", "removed", "serving"];
+          if (terminal.includes(updated.status)) {
+            setQueue((prev) => prev.filter((s) => s.ticket !== updated.ticket_number));
+          }
         }
       )
       .subscribe();
@@ -488,7 +488,7 @@ export default function AdminDashboard() {
   }, []);
 
   // ── Update window status in Supabase ─────────────────────
-  const updateWindowStatus = async (dept, newStatus) => {
+  const updateWindowStatus = async (dept: string, newStatus: string) => {
     setWindowStatusSaving(true);
 
     // Optimistically update local state first
@@ -599,17 +599,18 @@ export default function AdminDashboard() {
     setNoShowWarning(false);
     setGraceActive(false);
 
-    if (sAutoAdvance && queue.length > 0) {
-      const [next, ...rest] = queue;
+    // Bug 7 fix: use activeWindowQueue instead of full cross-dept queue
+    if (sAutoAdvance && activeWindowQueue.length > 0) {
+      const next = activeWindowQueue[0];
       setServing({ ...next, calledAt: nowStr });
-      setQueue(rest);
+      setQueue((q) => q.filter((s) => s.ticket !== next.ticket));
       startGrace();
     } else {
       setServing(null);
     }
   };
 
-  const removeFromQueue = async (ticket) => {
+  const removeFromQueue = async (ticket: string) => {
     const student = queue.find((s) => s.ticket === ticket);
 
     // Update Supabase
@@ -621,6 +622,7 @@ export default function AdminDashboard() {
 
     // Animate removal then update local state
     setRemoveId(ticket);
+    setRemoveConfirmTicket(null);
     setTimeout(() => {
       setQueue((q) => q.filter((s) => s.ticket !== ticket));
       if (student)
@@ -640,6 +642,7 @@ export default function AdminDashboard() {
     const ticketNum = `W-${String(walkInCounter++).padStart(3, "0")}`;
     const now = new Date();
     const apptTime = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    // Feature 4 fix: use walkInDepartment instead of always activeDepartment
     const { data, error } = await supabase
       .from("queue_tickets")
       .insert([{
@@ -648,7 +651,7 @@ export default function AdminDashboard() {
         service_type: walkInPurpose || "General",
         booking_type: "walkin",
         status: "waiting",
-        department: activeDepartment,
+        department: walkInDepartment,
         appointment_time: apptTime,
       }])
       .select()
@@ -660,12 +663,85 @@ export default function AdminDashboard() {
     setQueue((q) => [...q, rowToQueueItem(data, q.length)]);
     setWalkInName("");
     setWalkInPurpose("");
+    setWalkInDepartment(activeDepartment); // reset to default for next time
     setWalkInModal(false);
   };
 
+  // Bug 5 fix: persist settings to localStorage
   const saveSettings = () => {
+    localStorage.setItem("admin_sGrace", String(sGrace));
+    localStorage.setItem("admin_sWindow", sWindow);
+    localStorage.setItem("admin_sPrinter", String(sPrinter));
+    localStorage.setItem("admin_sMaxQueue", String(sMaxQueue));
+    localStorage.setItem("admin_sAutoAdvance", String(sAutoAdvance));
     setSettingsSaved(true);
     setTimeout(() => setSettingsSaved(false), 2400);
+  };
+
+  // Bug 3: Change Password handler
+  const handleChangePassword = async () => {
+    setPwError(null);
+    if (!pwNew || pwNew.length < 8) {
+      setPwError("New password must be at least 8 characters.");
+      return;
+    }
+    if (pwNew !== pwConfirm) {
+      setPwError("Passwords do not match.");
+      return;
+    }
+    setPwLoading(true);
+    const { error } = await supabase.auth.updateUser({ password: pwNew });
+    setPwLoading(false);
+    if (error) {
+      setPwError(error.message);
+      return;
+    }
+    setPwSuccess(true);
+    setPwCurrent("");
+    setPwNew("");
+    setPwConfirm("");
+    setTimeout(() => {
+      setPwSuccess(false);
+      setSPwModal(false);
+    }, 1800);
+  };
+
+  // Feature 1: Clear all waiting tickets for the active department
+  const handleClearQueue = async () => {
+    setClearingQueue(true);
+    const { error } = await supabase
+      .from("queue_tickets")
+      .update({ status: "removed" })
+      .eq("status", "waiting")
+      .eq("department", activeDepartment);
+    if (error && import.meta.env.DEV) console.warn("[DEV] Clear queue error:", error.message);
+    setQueue((q) => q.filter((s) => s.department !== activeDepartment));
+    setClearingQueue(false);
+    setShowClearConfirm(false);
+  };
+
+  // Feature 2: Export history as CSV
+  const handleExportCSV = () => {
+    if (!history.length) return;
+    const header = ["Ticket", "Name", "Service Type", "Department", "Status", "Time"].join(",");
+    const rows = history.map((h: HistoryItem) =>
+      [
+        h.ticket_number ?? "",
+        `"${(h.user_name ?? "").replace(/"/g, '""')}"`,
+        h.service_type ?? "",
+        h.department ?? "",
+        h.status ?? "",
+        h.appointment_time ?? "",
+      ].join(",")
+    );
+    const csv = [header, ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `sasched_history_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   // ── Derived values ────────────────────────────────────────
@@ -877,8 +953,8 @@ export default function AdminDashboard() {
   );
 
   // --- MINI HISTORY COMPONENT ---
-  const HistoryItem = ({ h }) => {
-    const getStatusColor = (status) => {
+  const HistoryItem = ({ h }: { h: HistoryItem }) => {
+    const getStatusColor = (status: string) => {
       switch (status) {
         case "served":
           return {
@@ -1036,7 +1112,7 @@ export default function AdminDashboard() {
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           {windows.map(({ key, label, status }) => {
-            const activeCfg = WIN_STATUS_CFG[status];
+            const activeCfg = WIN_STATUS_CFG[status as WinStatusKey];
             return (
               <div
                 key={key}
@@ -1100,10 +1176,10 @@ export default function AdminDashboard() {
                     gap: 6,
                   }}
                 >
-                  {(["open", "cutoff", "closed"]).map((opt) => {
+                  {(["open", "cutoff", "closed"] as WinStatusKey[]).map((opt) => {
                     const cfg = WIN_STATUS_CFG[opt];
                     const isActive = status === opt;
-                    const icons = {
+                    const icons: Record<WinStatusKey, React.ElementType> = {
                       open: DoorOpen,
                       cutoff: Scissors,
                       closed: DoorClosed,
@@ -1846,23 +1922,49 @@ export default function AdminDashboard() {
                     {s.service_type}
                   </div>
                   <TypeBadge type={s.type} />
-                  <button
-                    className="rm-btn ctrl-btn"
-                    onClick={() => removeFromQueue(s.ticket)}
-                    style={{
-                      width: 26,
-                      height: 26,
-                      borderRadius: 7,
-                      background: "rgba(239,68,68,0.12)",
-                      border: "1px solid rgba(239,68,68,0.2)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <X size={12} color="#f87171" />
-                  </button>
+                  {/* Bug 6: two-click confirm before removing */}
+                  {removeConfirmTicket === s.ticket ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <button
+                        className="ctrl-btn"
+                        onClick={() => removeFromQueue(s.ticket)}
+                        style={{
+                          padding: "3px 9px", borderRadius: 6, border: "none",
+                          background: "rgba(239,68,68,0.75)", color: "white",
+                          fontSize: 11, fontWeight: 700, cursor: "pointer",
+                          fontFamily: "'Outfit',sans-serif",
+                        }}
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        onClick={() => setRemoveConfirmTicket(null)}
+                        style={{
+                          width: 22, height: 22, borderRadius: 5,
+                          background: "rgba(255,255,255,0.06)",
+                          border: "1px solid rgba(255,255,255,0.12)",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <X size={10} color="rgba(255,255,255,0.5)" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      className="rm-btn ctrl-btn"
+                      onClick={() => setRemoveConfirmTicket(s.ticket)}
+                      style={{
+                        width: 26, height: 26, borderRadius: 7,
+                        background: "rgba(239,68,68,0.12)",
+                        border: "1px solid rgba(239,68,68,0.2)",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <X size={12} color="#f87171" />
+                    </button>
+                  )}
                 </div>
               ))
             )}
@@ -1930,11 +2032,13 @@ export default function AdminDashboard() {
     const filtered = queue
       .filter((s) => {
         const q = lqSearch.toLowerCase();
+        // Bug 1 fix: s.course didn't exist — use s.service_type
         const ms =
-          s.name.toLowerCase().includes(q) ||
-          s.ticket.toLowerCase().includes(q) ||
-          s.course.toLowerCase().includes(q);
-        const mp = lqProgram === "all" || s.course === lqProgram;
+          (s.name ?? "").toLowerCase().includes(q) ||
+          (s.ticket ?? "").toLowerCase().includes(q) ||
+          (s.service_type ?? "").toLowerCase().includes(q);
+        // Bug 1 fix: lqProgram filter was comparing against s.course (undefined)
+        const mp = lqProgram === "all" || s.service_type === lqProgram;
         const mt = lqType === "all" || s.type === lqType;
         return ms && mp && mt;
       })
@@ -1949,6 +2053,7 @@ export default function AdminDashboard() {
       acc[p] = queue.filter((s) => s.service_type === p).length;
       return acc;
     }, {} as Record<string, number>);
+    void purposeCounts; // available for future filtering
     const walkCnt = queue.filter((s) => s.type === "walkin").length;
     const clearFilters = () => {
       setLqSearch("");
@@ -1979,15 +2084,17 @@ export default function AdminDashboard() {
               border: "rgba(59,130,246,0.2)",
             },
             {
-              label: "Senior High",
-              value: shsCnt,
+              // Bug 1 fix: shsCnt was undefined — replaced with Cashier count
+              label: "Cashier Window",
+              value: queue.filter((s) => s.department === "Cashier").length,
               color: "#fbbf24",
               bg: "rgba(251,191,36,0.1)",
               border: "rgba(251,191,36,0.2)",
             },
             {
-              label: "College",
-              value: colCnt,
+              // Bug 1 fix: colCnt was undefined — replaced with Registrar count
+              label: "Registrar Window",
+              value: queue.filter((s) => s.department === "Registrar").length,
               color: "#818cf8",
               bg: "rgba(129,140,248,0.12)",
               border: "rgba(129,140,248,0.2)",
@@ -2385,23 +2492,49 @@ export default function AdminDashboard() {
                     <div
                       style={{ display: "flex", justifyContent: "flex-end" }}
                     >
-                      <button
-                        className="lq-rm ctrl-btn"
-                        onClick={() => removeFromQueue(s.ticket)}
-                        style={{
-                          width: 30,
-                          height: 30,
-                          borderRadius: 8,
-                          background: "rgba(239,68,68,0.1)",
-                          border: "1px solid rgba(239,68,68,0.2)",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          cursor: "pointer",
-                        }}
-                      >
-                        <X size={13} color="#f87171" />
-                      </button>
+                      {/* Bug 6: two-click confirm in live queue tab */}
+                      {removeConfirmTicket === s.ticket ? (
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <button
+                            className="ctrl-btn"
+                            onClick={() => removeFromQueue(s.ticket)}
+                            style={{
+                              padding: "5px 10px", borderRadius: 7, border: "none",
+                              background: "rgba(239,68,68,0.75)", color: "white",
+                              fontSize: 11, fontWeight: 700, cursor: "pointer",
+                              fontFamily: "'Outfit',sans-serif",
+                            }}
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            onClick={() => setRemoveConfirmTicket(null)}
+                            style={{
+                              width: 28, height: 28, borderRadius: 7,
+                              background: "rgba(255,255,255,0.05)",
+                              border: "1px solid rgba(255,255,255,0.1)",
+                              display: "flex", alignItems: "center", justifyContent: "center",
+                              cursor: "pointer",
+                            }}
+                          >
+                            <X size={11} color="rgba(255,255,255,0.5)" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          className="lq-rm ctrl-btn"
+                          onClick={() => setRemoveConfirmTicket(s.ticket)}
+                          style={{
+                            width: 30, height: 30, borderRadius: 8,
+                            background: "rgba(239,68,68,0.1)",
+                            border: "1px solid rgba(239,68,68,0.2)",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <X size={13} color="#f87171" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -2430,26 +2563,39 @@ export default function AdminDashboard() {
               </strong>{" "}
               users in queue
             </span>
-            <button
-              className="ctrl-btn"
-              onClick={() => setWalkInModal(true)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "7px 14px",
-                borderRadius: 9,
-                background: "rgba(167,139,250,0.1)",
-                border: "1px solid rgba(167,139,250,0.2)",
-                color: "#c4b5fd",
-                fontSize: 12,
-                fontWeight: 700,
-                cursor: "pointer",
-                fontFamily: "'Outfit',sans-serif",
-              }}
-            >
-              <UserPlus size={13} /> Add Walk-in
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              {/* Feature 1: Clear Queue button */}
+              <button
+                className="ctrl-btn"
+                onClick={() => setShowClearConfirm(true)}
+                disabled={activeWindowQueue.length === 0}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6,
+                  padding: "7px 14px", borderRadius: 9,
+                  background: activeWindowQueue.length === 0 ? "rgba(239,68,68,0.05)" : "rgba(239,68,68,0.1)",
+                  border: "1px solid rgba(239,68,68,0.2)",
+                  color: activeWindowQueue.length === 0 ? "rgba(248,113,113,0.35)" : "#f87171",
+                  fontSize: 12, fontWeight: 700, cursor: activeWindowQueue.length === 0 ? "not-allowed" : "pointer",
+                  fontFamily: "'Outfit',sans-serif",
+                }}
+              >
+                <TrashIcon size={13} /> Clear Queue
+              </button>
+              <button
+                className="ctrl-btn"
+                onClick={() => setWalkInModal(true)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6,
+                  padding: "7px 14px", borderRadius: 9,
+                  background: "rgba(167,139,250,0.1)",
+                  border: "1px solid rgba(167,139,250,0.2)",
+                  color: "#c4b5fd", fontSize: 12, fontWeight: 700,
+                  cursor: "pointer", fontFamily: "'Outfit',sans-serif",
+                }}
+              >
+                <UserPlus size={13} /> Add Walk-in
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -2471,7 +2617,7 @@ export default function AdminDashboard() {
         : 0;
     const avgResolution = (() => {
       const durations = servedEntries
-        .map((h) => parseInt(h.duration))
+        .map((h) => parseInt(h.duration ?? "0"))
         .filter((n) => !isNaN(n));
       if (!durations.length) return "—";
       return `${Math.round(
@@ -2479,7 +2625,7 @@ export default function AdminDashboard() {
       )} min`;
     })();
 
-    const toggleSort = (col) => {
+    const toggleSort = (col: string) => {
       if (hSortCol === col) setHSortDir((d) => (d === "asc" ? "desc" : "asc"));
       else {
         setHSortCol(col);
@@ -2513,8 +2659,8 @@ export default function AdminDashboard() {
           cmp = (a.status || "").localeCompare(b.status || "");
         }
         if (hSortCol === "time") {
-          cmp = (a.appointment_time || "").localeCompare(
-            b.appointment_time || ""
+          cmp = (a.appointment_time ?? "").localeCompare(
+            b.appointment_time ?? ""
           );
         }
         return hSortDir === "asc" ? cmp : -cmp;
@@ -2546,7 +2692,7 @@ export default function AdminDashboard() {
       },
     };
 
-    const MiniBar = ({ value, max, color }) => (
+    const MiniBar = ({ value, max, color }: { value: number; max: number; color: string }) => (
       <div
         style={{
           flex: 1,
@@ -2568,7 +2714,7 @@ export default function AdminDashboard() {
       </div>
     );
 
-    const SortTh = ({ col, children }) => {
+    const SortTh = ({ col, children }: { col: string; children: React.ReactNode }) => {
       const active = hSortCol === col;
       return (
         <div
@@ -2880,38 +3026,40 @@ export default function AdminDashboard() {
               flexWrap: "wrap",
             }}
           >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                marginRight: 4,
-              }}
-            >
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 4 }}>
               <History size={14} color="#a78bfa" />
-              <span
-                style={{
-                  fontSize: 13,
-                  fontWeight: 700,
-                  color: "rgba(255,255,255,0.85)",
-                }}
-              >
+              <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.85)" }}>
                 Session Log
               </span>
-              <div
-                style={{
-                  background: "rgba(167,139,250,0.2)",
-                  border: "1px solid rgba(167,139,250,0.3)",
-                  borderRadius: 99,
-                  padding: "2px 9px",
-                  fontSize: 11,
-                  color: "#c4b5fd",
-                  fontWeight: 700,
-                }}
-              >
+              <div style={{
+                background: "rgba(167,139,250,0.2)",
+                border: "1px solid rgba(167,139,250,0.3)",
+                borderRadius: 99, padding: "2px 9px",
+                fontSize: 11, color: "#c4b5fd", fontWeight: 700,
+              }}>
                 {history.length}
               </div>
             </div>
+            {/* Feature 2: CSV export button */}
+            <button
+              className="ctrl-btn"
+              onClick={handleExportCSV}
+              disabled={!history.length}
+              title="Export history as CSV"
+              style={{
+                display: "flex", alignItems: "center", gap: 6,
+                padding: "7px 13px", borderRadius: 9,
+                background: history.length ? "rgba(52,211,153,0.1)" : "rgba(52,211,153,0.04)",
+                border: "1px solid rgba(52,211,153,0.2)",
+                color: history.length ? "#34d399" : "rgba(52,211,153,0.3)",
+                fontSize: 12, fontWeight: 700,
+                cursor: history.length ? "pointer" : "not-allowed",
+                fontFamily: "'Outfit',sans-serif",
+                marginLeft: "auto",
+              }}
+            >
+              <FileDown size={13} /> Export CSV
+            </button>
             <div style={{ position: "relative", flex: "1 1 180px" }}>
               <Search
                 size={13}
@@ -3294,6 +3442,14 @@ export default function AdminDashboard() {
       title,
       subtitle,
       children,
+    }: {
+      icon: React.ElementType;
+      iconColor: string;
+      iconBg: string;
+      iconBorder: string;
+      title: string;
+      subtitle?: string;
+      children: React.ReactNode;
     }) => (
       <div
         style={{
@@ -3356,7 +3512,7 @@ export default function AdminDashboard() {
       </div>
     );
 
-    const SettingRow = ({ label, hint, children, noBorder }) => (
+    const SettingRow = ({ label, hint, children, noBorder }: { label: string; hint?: React.ReactNode; children: React.ReactNode; noBorder?: boolean }) => (
       <div
         className="settings-row"
         style={{
@@ -3395,7 +3551,7 @@ export default function AdminDashboard() {
       </div>
     );
 
-    const Toggle = ({ value, onChange }) => (
+    const Toggle = ({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) => (
       <div
         className="toggle-track"
         onClick={() => onChange(!value)}
@@ -3427,7 +3583,7 @@ export default function AdminDashboard() {
       </div>
     );
 
-    const NumInput = ({ value, onChange, min, max, unit }) => (
+    const NumInput = ({ value, onChange, min, max, unit }: { value: number; onChange: (v: number) => void; min: number; max: number; unit?: string }) => (
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <div
           style={{
@@ -3513,7 +3669,7 @@ export default function AdminDashboard() {
       </div>
     );
 
-    const StyledSelect = ({ value, onChange, options }) => (
+    const StyledSelect = ({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) => (
       <div style={{ position: "relative" }}>
         <select
           value={value}
@@ -3770,21 +3926,38 @@ export default function AdminDashboard() {
             <SettingRow
               label="Role"
               hint="Your permission level within the SAS system."
-              noBorder
             >
               <span
                 style={{
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: "#a78bfa",
+                  fontSize: 12, fontWeight: 700, color: "#a78bfa",
                   background: "rgba(167,139,250,0.1)",
                   border: "1px solid rgba(167,139,250,0.2)",
-                  borderRadius: 8,
-                  padding: "5px 12px",
+                  borderRadius: 8, padding: "5px 12px",
                 }}
               >
                 Registrar Admin
               </span>
+            </SettingRow>
+            {/* Bug 3 fix: button to open Change Password modal */}
+            <SettingRow
+              label="Password"
+              hint="Update your login credentials securely."
+              noBorder
+            >
+              <button
+                onClick={() => { setSPwModal(true); setPwError(null); setPwSuccess(false); }}
+                className="ctrl-btn"
+                style={{
+                  display: "flex", alignItems: "center", gap: 6,
+                  padding: "8px 16px", borderRadius: 10,
+                  border: "1px solid rgba(52,211,153,0.25)",
+                  background: "rgba(52,211,153,0.08)",
+                  color: "#34d399", fontSize: 12, fontWeight: 700,
+                  cursor: "pointer", fontFamily: "'Outfit',sans-serif",
+                }}
+              >
+                <KeyRound size={13} /> Change Password
+              </button>
             </SettingRow>
           </SectionCard>
 
@@ -3828,6 +4001,12 @@ export default function AdminDashboard() {
                   setSPrinter(false);
                   setSMaxQueue(50);
                   setSAutoAdvance(false);
+                  // Bug 5 fix: also clear localStorage
+                  localStorage.removeItem("admin_sGrace");
+                  localStorage.removeItem("admin_sWindow");
+                  localStorage.removeItem("admin_sPrinter");
+                  localStorage.removeItem("admin_sMaxQueue");
+                  localStorage.removeItem("admin_sAutoAdvance");
                 }}
                 style={{
                   display: "flex",
@@ -3956,86 +4135,90 @@ export default function AdminDashboard() {
                   <X size={15} color="rgba(255,255,255,0.5)" />
                 </button>
               </div>
-              {[
-                {
-                  label: "Current Password",
-                  placeholder: "Enter current password",
-                },
-                { label: "New Password", placeholder: "Min. 8 characters" },
-                {
-                  label: "Confirm Password",
-                  placeholder: "Re-enter new password",
-                },
-              ].map((f) => (
-                <div key={f.label} style={{ marginBottom: 14 }}>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: 11,
-                      fontWeight: 700,
-                      color: "rgba(255,255,255,0.45)",
-                      marginBottom: 7,
-                      letterSpacing: "0.06em",
-                    }}
-                  >
-                    {f.label.toUpperCase()}
-                  </label>
-                  <input
-                    type="password"
-                    placeholder={f.placeholder}
-                    style={{
-                      width: "100%",
-                      padding: "11px 14px",
-                      borderRadius: 10,
-                      border: "1px solid rgba(255,255,255,0.1)",
-                      background: "rgba(255,255,255,0.05)",
-                      color: "white",
-                      fontSize: 14,
-                      fontFamily: "'Outfit',sans-serif",
-                    }}
-                  />
+              {/* Bug 3 fix: wired inputs with state + validation feedback */}
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.45)", marginBottom: 7, letterSpacing: "0.06em" }}>
+                  CURRENT PASSWORD
+                </label>
+                <input
+                  type="password"
+                  value={pwCurrent}
+                  onChange={(e) => setPwCurrent(e.target.value)}
+                  placeholder="Enter current password"
+                  style={{ width: "100%", padding: "11px 14px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.05)", color: "white", fontSize: 14, fontFamily: "'Outfit',sans-serif" }}
+                />
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.45)", marginBottom: 7, letterSpacing: "0.06em" }}>
+                  NEW PASSWORD
+                </label>
+                <input
+                  type="password"
+                  value={pwNew}
+                  onChange={(e) => setPwNew(e.target.value)}
+                  placeholder="Min. 8 characters"
+                  style={{ width: "100%", padding: "11px 14px", borderRadius: 10, border: `1px solid ${pwError ? "rgba(239,68,68,0.5)" : "rgba(255,255,255,0.1)"}`, background: "rgba(255,255,255,0.05)", color: "white", fontSize: 14, fontFamily: "'Outfit',sans-serif" }}
+                />
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.45)", marginBottom: 7, letterSpacing: "0.06em" }}>
+                  CONFIRM PASSWORD
+                </label>
+                <input
+                  type="password"
+                  value={pwConfirm}
+                  onChange={(e) => setPwConfirm(e.target.value)}
+                  placeholder="Re-enter new password"
+                  style={{ width: "100%", padding: "11px 14px", borderRadius: 10, border: `1px solid ${pwError ? "rgba(239,68,68,0.5)" : "rgba(255,255,255,0.1)"}`, background: "rgba(255,255,255,0.05)", color: "white", fontSize: 14, fontFamily: "'Outfit',sans-serif" }}
+                />
+              </div>
+              {pwError && (
+                <div style={{ fontSize: 12, color: "#f87171", marginBottom: 8, padding: "8px 12px", background: "rgba(239,68,68,0.1)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.2)" }}>
+                  {pwError}
                 </div>
-              ))}
+              )}
+              {pwSuccess && (
+                <div style={{ fontSize: 12, color: "#4ade80", marginBottom: 8, padding: "8px 12px", background: "rgba(34,197,94,0.1)", borderRadius: 8, border: "1px solid rgba(34,197,94,0.2)", display: "flex", alignItems: "center", gap: 6 }}>
+                  <CheckCheck size={13} /> Password updated successfully!
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
                 <button
-                  onClick={() => setSPwModal(false)}
+                  onClick={() => { setSPwModal(false); setPwError(null); setPwCurrent(""); setPwNew(""); setPwConfirm(""); }}
                   style={{
-                    flex: 1,
-                    padding: "12px",
-                    borderRadius: 11,
+                    flex: 1, padding: "12px", borderRadius: 11,
                     border: "1px solid rgba(255,255,255,0.1)",
                     background: "rgba(255,255,255,0.05)",
-                    color: "rgba(255,255,255,0.6)",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    cursor: "pointer",
+                    color: "rgba(255,255,255,0.6)", fontSize: 13,
+                    fontWeight: 600, cursor: "pointer",
                     fontFamily: "'Outfit',sans-serif",
                   }}
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={() => setSPwModal(false)}
+                  onClick={handleChangePassword}
+                  disabled={pwLoading || pwSuccess}
                   className="ctrl-btn"
                   style={{
-                    flex: 2,
-                    padding: "12px",
-                    borderRadius: 11,
-                    border: "none",
-                    background: "linear-gradient(135deg,#059669,#047857)",
-                    color: "white",
-                    fontSize: 13,
-                    fontWeight: 700,
-                    cursor: "pointer",
+                    flex: 2, padding: "12px", borderRadius: 11, border: "none",
+                    background: pwSuccess
+                      ? "linear-gradient(135deg,#16a34a,#15803d)"
+                      : "linear-gradient(135deg,#059669,#047857)",
+                    color: "white", fontSize: 13, fontWeight: 700,
+                    cursor: pwLoading ? "not-allowed" : "pointer",
                     fontFamily: "'Outfit',sans-serif",
                     boxShadow: "0 6px 20px rgba(5,150,105,0.35)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 7,
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
+                    opacity: pwLoading ? 0.7 : 1,
                   }}
                 >
-                  <ShieldCheck size={14} /> Update Password
+                  {pwLoading ? (
+                    <div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.3)", borderTop: "2px solid white", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
+                  ) : (
+                    <ShieldCheck size={14} />
+                  )}
+                  {pwSuccess ? "Updated!" : "Update Password"}
                 </button>
               </div>
             </div>
@@ -4373,23 +4556,48 @@ export default function AdminDashboard() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div
-              onClick={handleLogout}
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 10,
-                background: "rgba(255,255,255,0.05)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                cursor: "pointer",
-              }}
-              title="Log Out"
-            >
-              <LogOut size={15} color="rgba(255,255,255,0.6)" />
-            </div>
+            {showLogoutConfirm ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 12, color: "rgba(255,255,255,0.55)" }}>Log out?</span>
+                <button
+                  onClick={handleLogout}
+                  style={{
+                    padding: "5px 12px", borderRadius: 8, border: "none",
+                    background: "rgba(239,68,68,0.8)", color: "white",
+                    fontSize: 12, fontWeight: 700, cursor: "pointer",
+                    fontFamily: "'Outfit',sans-serif",
+                  }}
+                >
+                  Yes
+                </button>
+                <button
+                  onClick={() => setShowLogoutConfirm(false)}
+                  style={{
+                    padding: "5px 12px", borderRadius: 8,
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)",
+                    fontSize: 12, fontWeight: 600, cursor: "pointer",
+                    fontFamily: "'Outfit',sans-serif",
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowLogoutConfirm(true)}
+                title="Log Out"
+                style={{
+                  width: 36, height: 36, borderRadius: 10,
+                  background: "rgba(255,255,255,0.05)",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  cursor: "pointer",
+                }}
+              >
+                <LogOut size={15} color="rgba(255,255,255,0.6)" />
+              </button>
+            )}
           </div>
         </header>
 
@@ -4399,6 +4607,91 @@ export default function AdminDashboard() {
         {activeNav === "history" && renderHistory()}
         {activeNav === "settings" && renderSettings()}
       </div>
+
+      {/* ── CLEAR QUEUE CONFIRM MODAL (Feature 1) ─────────────── */}
+      {showClearConfirm && (
+        <div
+          onClick={() => setShowClearConfirm(false)}
+          style={{
+            position: "fixed", inset: 0,
+            background: "rgba(0,0,0,0.75)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 150, backdropFilter: "blur(8px)",
+          }}
+        >
+          <div
+            className="slide-in"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "linear-gradient(145deg,#0f2057,#0d1a40)",
+              border: "1px solid rgba(239,68,68,0.3)",
+              borderRadius: 20, padding: "30px", width: 380,
+              boxShadow: "0 24px 64px rgba(0,0,0,0.5)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
+              <div style={{
+                width: 42, height: 42, borderRadius: 12,
+                background: "rgba(239,68,68,0.15)",
+                border: "1px solid rgba(239,68,68,0.3)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <TrashIcon size={19} color="#f87171" />
+              </div>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: "white" }}>Clear Queue</div>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
+                  {activeDepartment} window · {activeWindowQueue.length} ticket{activeWindowQueue.length !== 1 ? "s" : ""}
+                </div>
+              </div>
+            </div>
+            <div style={{
+              fontSize: 13, color: "rgba(255,255,255,0.6)", lineHeight: 1.6,
+              background: "rgba(239,68,68,0.08)", borderRadius: 10,
+              padding: "12px 14px", marginBottom: 20,
+              border: "1px solid rgba(239,68,68,0.15)",
+            }}>
+              This will mark all <strong style={{ color: "#f87171" }}>{activeWindowQueue.length} waiting ticket{activeWindowQueue.length !== 1 ? "s" : ""}</strong> in the <strong>{activeDepartment}</strong> window as <strong>Removed</strong>. This cannot be undone.
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                style={{
+                  flex: 1, padding: "11px", borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  background: "rgba(255,255,255,0.05)",
+                  color: "rgba(255,255,255,0.6)", fontSize: 13,
+                  fontWeight: 600, cursor: "pointer",
+                  fontFamily: "'Outfit',sans-serif",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleClearQueue}
+                disabled={clearingQueue}
+                className="ctrl-btn"
+                style={{
+                  flex: 2, padding: "11px", borderRadius: 10, border: "none",
+                  background: clearingQueue ? "rgba(239,68,68,0.4)" : "linear-gradient(135deg,#dc2626,#b91c1c)",
+                  color: "white", fontSize: 13, fontWeight: 700,
+                  cursor: clearingQueue ? "not-allowed" : "pointer",
+                  fontFamily: "'Outfit',sans-serif",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
+                  boxShadow: "0 6px 20px rgba(220,38,38,0.35)",
+                }}
+              >
+                {clearingQueue ? (
+                  <div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.3)", borderTop: "2px solid white", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
+                ) : (
+                  <TrashIcon size={14} />
+                )}
+                {clearingQueue ? "Clearing…" : "Clear All"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── WALK-IN MODAL ─────────────────────────────────────────── */}
       {walkInModal && (
@@ -4475,16 +4768,11 @@ export default function AdminDashboard() {
               </button>
             </div>
             <div style={{ marginBottom: 14 }}>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: "rgba(255,255,255,0.5)",
-                  marginBottom: 7,
-                  letterSpacing: "0.06em",
-                }}
-              >
+              <label style={{
+                display: "block", fontSize: 11, fontWeight: 700,
+                color: "rgba(255,255,255,0.5)", marginBottom: 7,
+                letterSpacing: "0.06em",
+              }}>
                 FULL NAME
               </label>
               <input
@@ -4492,16 +4780,40 @@ export default function AdminDashboard() {
                 onChange={(e) => setWalkInName(e.target.value)}
                 placeholder="e.g. Juan dela Cruz"
                 style={{
-                  width: "100%",
-                  padding: "11px 14px",
-                  borderRadius: 10,
+                  width: "100%", padding: "11px 14px", borderRadius: 10,
                   border: "1px solid rgba(255,255,255,0.1)",
-                  background: "rgba(255,255,255,0.05)",
-                  color: "white",
-                  fontSize: 14,
-                  fontFamily: "'Outfit',sans-serif",
+                  background: "rgba(255,255,255,0.05)", color: "white",
+                  fontSize: 14, fontFamily: "'Outfit',sans-serif",
                 }}
               />
+            </div>
+            {/* Feature 4: Department selector */}
+            <div style={{ marginBottom: 14 }}>
+              <label style={{
+                display: "block", fontSize: 11, fontWeight: 700,
+                color: "rgba(255,255,255,0.5)", marginBottom: 7,
+                letterSpacing: "0.06em",
+              }}>
+                WINDOW / DEPARTMENT
+              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {["Cashier", "Registrar"].map((dept) => (
+                  <button
+                    key={dept}
+                    onClick={() => setWalkInDepartment(dept)}
+                    style={{
+                      padding: "9px 14px", borderRadius: 9, cursor: "pointer",
+                      fontFamily: "'Outfit',sans-serif", fontSize: 13, fontWeight: 700,
+                      background: walkInDepartment === dept ? "rgba(167,139,250,0.2)" : "rgba(255,255,255,0.04)",
+                      border: `1px solid ${walkInDepartment === dept ? "rgba(167,139,250,0.5)" : "rgba(255,255,255,0.1)"}`,
+                      color: walkInDepartment === dept ? "#c4b5fd" : "rgba(255,255,255,0.45)",
+                      transition: "all 0.15s ease",
+                    }}
+                  >
+                    {dept}
+                  </button>
+                ))}
+              </div>
             </div>
             <div style={{ marginBottom: 22 }}>
               <label
