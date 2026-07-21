@@ -71,7 +71,6 @@ interface HistoryItem {
   status: string;
   time?: string;
   appointment_time?: string;
-  appointment_date?: string;
   duration?: string;
   department?: string;
   walkin?: boolean;
@@ -529,37 +528,28 @@ export default function AdminDashboard() {
     }
   }, [activeNav]);
 
-  // ── Bug C: Fetch upcoming (future-date) appointments ──────────
+  // ── Bug C fix: Fetch upcoming (future-date) appointments ──────
+  // The queue_tickets table has no appointment_date column.
+  // "Upcoming" = waiting tickets whose created_at date is AFTER today
+  // (the SAS booking system inserts future-dated tickets in advance).
   const fetchUpcoming = async () => {
     setUpcomingLoading(true);
     try {
-      // Today's date as ISO string (YYYY-MM-DD)
-      const today = new Date().toISOString().slice(0, 10);
-      // Try appointment_date column first; if none, fall back to created_at ordering
-      // We select all waiting tickets and filter client-side by date portion
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+      const todayEndISO = todayEnd.toISOString();
+
       const { data, error } = await supabase
         .from("queue_tickets")
         .select("*")
         .eq("status", "waiting")
-        .order("appointment_date", { ascending: true })
-        .gt("appointment_date", today)
-        .limit(30);
+        .gt("created_at", todayEndISO)   // created AFTER end of today
+        .order("created_at", { ascending: true })
+        .limit(50);
 
       if (error) {
-        // appointment_date column may not exist — fall back to a general future query
-        const { data: fallback } = await supabase
-          .from("queue_tickets")
-          .select("*")
-          .eq("status", "waiting")
-          .order("created_at", { ascending: true })
-          .limit(30);
-        // Filter to anything whose appointment_time looks like a future date
-        const futureFallback = (fallback || []).filter((row: Record<string, string>) => {
-          // If row has appointment_date field, compare it
-          if (row.appointment_date) return row.appointment_date > today;
-          return false; // can't determine, skip
-        });
-        setUpcoming(futureFallback);
+        if (import.meta.env.DEV) console.warn("[DEV] fetchUpcoming error:", error.message);
+        setUpcoming([]);
       } else {
         setUpcoming(data || []);
       }
@@ -892,7 +882,8 @@ export default function AdminDashboard() {
     const ticketNum = `W-${suffix}`;
     const now = new Date();
     const apptTime = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    const apptDate = now.toISOString().slice(0, 10); // YYYY-MM-DD
+    // NOTE: appointment_date column does not exist in queue_tickets
+    // Only send columns that exist in the schema
 
     const { data, error } = await supabase
       .from("queue_tickets")
@@ -904,7 +895,6 @@ export default function AdminDashboard() {
         status: "waiting",
         department: walkInDepartment,
         appointment_time: apptTime,
-        appointment_date: apptDate,
       }])
       .select()
       .single();
@@ -1868,10 +1858,12 @@ export default function AdminDashboard() {
             </div>
           ) : (
             (() => {
-              // Group by appointment_date
+              // Group by the date portion of created_at
               const groups: Record<string, HistoryItem[]> = {};
               upcoming.forEach((item) => {
-                const d = (item as Record<string, string>).appointment_date || "Unknown";
+                // Use created_at date as the group key (no appointment_date column in DB)
+                const createdAt = item.created_at || "";
+                const d = createdAt ? createdAt.slice(0, 10) : "Unknown";
                 if (!groups[d]) groups[d] = [];
                 groups[d].push(item);
               });
