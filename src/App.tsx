@@ -71,11 +71,13 @@ interface HistoryItem {
   status: string;
   time?: string;
   appointment_time?: string;
+  appointment_date?: string;
   duration?: string;
   department?: string;
   walkin?: boolean;
   id?: string;
   created_at?: string;
+  [key: string]: string | number | boolean | null | undefined;
 }
 
 // ─── HELPERS ────────────────────────────────────────────────────────────────
@@ -210,9 +212,202 @@ const WIN_STATUS_CFG = {
 };
 
 // ╔═══════════════════════════════════════════════════════════╗
+// ║  STABLE SUB-COMPONENTS (top-level — never re-created)    ║
+// ║  These were previously inline inside AdminDashboard,     ║
+// ║  causing flicker/remount on every state change.          ║
+// ╚═══════════════════════════════════════════════════════════╝
+
+// ── GraceTimer ────────────────────────────────────────────────────────────────
+interface GraceTimerProps {
+  graceTime: number;
+  graceActive: boolean;
+  noShowWarning: boolean;
+  sGrace: number;
+  onMarkNoShow: () => void;
+}
+function GraceTimer({ graceTime, graceActive, noShowWarning, sGrace, onMarkNoShow }: GraceTimerProps) {
+  const circumference = 2 * Math.PI * 38;
+  const dashOffset = circumference * (1 - graceTime / sGrace);
+  return (
+    <div
+      style={{
+        background: noShowWarning
+          ? "rgba(239,68,68,0.12)"
+          : graceActive
+          ? "rgba(37,99,235,0.12)"
+          : "rgba(255,255,255,0.04)",
+        border: `1px solid ${
+          noShowWarning
+            ? "rgba(239,68,68,0.35)"
+            : graceActive
+            ? "rgba(37,99,235,0.25)"
+            : "rgba(255,255,255,0.08)"
+        }`,
+        borderRadius: 14,
+        padding: "14px 16px",
+        display: "flex",
+        alignItems: "center",
+        gap: 16,
+        transition: "all 0.4s ease",
+      }}
+    >
+      <div style={{ position: "relative", width: 80, height: 80, flexShrink: 0 }}>
+        <svg width="80" height="80" viewBox="0 0 80 80">
+          <circle cx="40" cy="40" r="38" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="4" />
+          <circle
+            className="grace-ring"
+            cx="40" cy="40" r="38" fill="none"
+            stroke={noShowWarning ? "#ef4444" : graceTime <= 5 ? "#f59e0b" : "#3b82f6"}
+            strokeWidth="4" strokeLinecap="round"
+            strokeDasharray={circumference} strokeDashoffset={dashOffset}
+          />
+        </svg>
+        <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+          {noShowWarning ? (
+            <AlertTriangle size={22} color="#ef4444" className="noshow-pulse" />
+          ) : (
+            <>
+              <div style={{ fontFamily: "'Space Mono',monospace", fontSize: 20, fontWeight: 700, color: graceTime <= 5 ? "#fbbf24" : "white", lineHeight: 1 }}>
+                {graceTime}
+              </div>
+              <div style={{ fontSize: 9, color: "rgba(255,255,255,0.4)", fontWeight: 600, letterSpacing: "0.04em" }}>SEC</div>
+            </>
+          )}
+        </div>
+      </div>
+      <div style={{ flex: 1 }}>
+        {noShowWarning ? (
+          <div className="noshow-pulse">
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#f87171", marginBottom: 4 }}>⚠ Grace Period Expired</div>
+            <div style={{ fontSize: 11, color: "rgba(248,113,113,0.7)", lineHeight: 1.5, marginBottom: 10 }}>
+              User did not appear. Mark as No-Show or Recall.
+            </div>
+            <button
+              onClick={onMarkNoShow}
+              className="ctrl-btn"
+              style={{ background: "rgba(239,68,68,0.25)", border: "1px solid rgba(239,68,68,0.4)", borderRadius: 8, padding: "7px 14px", color: "#fca5a5", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Outfit',sans-serif", display: "flex", alignItems: "center", gap: 6 }}
+            >
+              <ShieldAlert size={13} /> Mark as No-Show
+            </button>
+          </div>
+        ) : graceActive ? (
+          <>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.8)", marginBottom: 4 }}>Grace Period Active</div>
+            <div style={{ height: 5, background: "rgba(255,255,255,0.08)", borderRadius: 99, overflow: "hidden", marginBottom: 6 }}>
+              <div style={{ height: "100%", width: `${(graceTime / sGrace) * 100}%`, background: graceTime <= 5 ? "#f59e0b" : "#3b82f6", borderRadius: 99, transition: "width 1s linear, background 0.3s ease" }} />
+            </div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>User has {graceTime}s to reach the window</div>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.5)", marginBottom: 4 }}>Timer Idle</div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)" }}>Call Next to start the grace timer</div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── HistoryItemRow ─────────────────────────────────────────────────────────────
+function HistoryItemRow({ h }: { h: HistoryItem }) {
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case "served": return { bg: "rgba(16,185,129,0.15)", text: "#34d399", border: "rgba(16,185,129,0.2)" };
+      case "noshow": return { bg: "rgba(239,68,68,0.15)", text: "#f87171", border: "rgba(239,68,68,0.2)" };
+      case "removed": return { bg: "rgba(100,116,139,0.15)", text: "#94a3b8", border: "rgba(100,116,139,0.2)" };
+      default: return { bg: "rgba(100,116,139,0.15)", text: "#94a3b8", border: "rgba(100,116,139,0.2)" };
+    }
+  };
+  const colors = getStatusColor(h.status);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 20px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+      <div style={{ fontFamily: "'Space Mono',monospace", fontSize: 11, color: "rgba(255,255,255,0.4)", fontWeight: 700 }}>
+        {h.ticket_number}
+      </div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>{h.user_name}</div>
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{h.appointment_time}</div>
+      </div>
+      <div style={{ background: colors.bg, color: colors.text, border: `1px solid ${colors.border}`, fontSize: 9, fontWeight: 800, padding: "3px 8px", borderRadius: 6, letterSpacing: "0.04em" }}>
+        {h.status ? h.status.toUpperCase() : "UNKNOWN"}
+      </div>
+    </div>
+  );
+}
+
+// ── WindowOperationsCard ──────────────────────────────────────────────────────
+interface WindowOperationsCardProps {
+  cashierStatus: string;
+  registrarStatus: string;
+  windowStatusSaving: boolean;
+  onUpdate: (dept: string, status: string) => void;
+}
+function WindowOperationsCard({ cashierStatus, registrarStatus, windowStatusSaving, onUpdate }: WindowOperationsCardProps) {
+  const windows = [
+    { key: "cashier", label: "Cashier Window", status: cashierStatus },
+    { key: "registrar", label: "Registrar Window", status: registrarStatus },
+  ];
+  return (
+    <div
+      style={{ background: "rgba(15,25,54,0.8)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 20, padding: "20px", marginBottom: 16 }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <DoorOpen size={14} color="#a78bfa" />
+          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", fontWeight: 700, letterSpacing: "0.08em" }}>WINDOW OPERATIONS</span>
+        </div>
+        {windowStatusSaving && (
+          <span style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", display: "flex", alignItems: "center", gap: 5, fontStyle: "italic" }}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", border: "1.5px solid rgba(255,255,255,0.3)", borderTop: "1.5px solid white", animation: "spin 0.7s linear infinite" }} />
+            Saving…
+          </span>
+        )}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        {windows.map(({ key, label, status }) => {
+          const activeCfg = WIN_STATUS_CFG[status as WinStatusKey];
+          return (
+            <div key={key} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: "14px 16px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: "rgba(255,255,255,0.75)", letterSpacing: "-0.01em" }}>{label}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 5, background: activeCfg.bg, border: `1px solid ${activeCfg.border}`, borderRadius: 99, padding: "3px 10px", fontSize: 10, fontWeight: 700, color: activeCfg.color }}>
+                  <div style={{ width: 5, height: 5, borderRadius: "50%", background: activeCfg.dotColor }} />
+                  {activeCfg.label.toUpperCase()}
+                </span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+                {(["open", "cutoff", "closed"] as WinStatusKey[]).map((opt) => {
+                  const cfg = WIN_STATUS_CFG[opt];
+                  const isActive = status === opt;
+                  const icons: Record<WinStatusKey, React.ElementType> = { open: DoorOpen, cutoff: Scissors, closed: DoorClosed };
+                  const Icon = icons[opt];
+                  return (
+                    <button
+                      key={opt}
+                      className="win-opt-btn"
+                      onClick={() => onUpdate(key, opt)}
+                      style={{ padding: "9px 4px", borderRadius: 10, border: isActive ? `1.5px solid ${cfg.activeBorder}` : "1.5px solid rgba(255,255,255,0.07)", background: isActive ? cfg.activeBg : "rgba(255,255,255,0.03)", color: isActive ? cfg.color : "rgba(255,255,255,0.3)", fontSize: 11, fontWeight: isActive ? 700 : 500, cursor: "pointer", fontFamily: "'Outfit',sans-serif", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, boxShadow: isActive ? `0 0 12px ${cfg.bg}` : "none", transition: "all 0.18s ease" }}
+                    >
+                      <Icon size={13} />
+                      {cfg.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ╔═══════════════════════════════════════════════════════════╗
 // ║  MAIN COMPONENT                                          ║
 // ╚═══════════════════════════════════════════════════════════╝
 export default function AdminDashboard() {
+
   const [activeNav, setActiveNav] = useState("dashboard");
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [serving, setServing] = useState<QueueItem | null>(null);
@@ -246,6 +441,12 @@ export default function AdminDashboard() {
   const [pwLoading, setPwLoading] = useState(false);
   // ── Walk-in department selector (Feature 4) ───────────────────
   const [walkInDepartment, setWalkInDepartment] = useState("Cashier");
+  // ── Walk-in loading + error feedback (Bug B fix) ──────────────
+  const [walkInLoading, setWalkInLoading] = useState(false);
+  const [walkInError, setWalkInError] = useState<string | null>(null);
+  // ── Upcoming appointments (Bug C) ─────────────────────────────
+  const [upcoming, setUpcoming] = useState<HistoryItem[]>([]);
+  const [upcomingLoading, setUpcomingLoading] = useState(false);
 
   // ── Window Status State ──────────────────────────────────
   const [cashierStatus, setCashierStatus] = useState("open");
@@ -323,7 +524,52 @@ export default function AdminDashboard() {
     if (activeNav === "history") {
       fetchHistoryData();
     }
+    if (activeNav === "dashboard") {
+      fetchUpcoming();
+    }
   }, [activeNav]);
+
+  // ── Bug C: Fetch upcoming (future-date) appointments ──────────
+  const fetchUpcoming = async () => {
+    setUpcomingLoading(true);
+    try {
+      // Today's date as ISO string (YYYY-MM-DD)
+      const today = new Date().toISOString().slice(0, 10);
+      // Try appointment_date column first; if none, fall back to created_at ordering
+      // We select all waiting tickets and filter client-side by date portion
+      const { data, error } = await supabase
+        .from("queue_tickets")
+        .select("*")
+        .eq("status", "waiting")
+        .order("appointment_date", { ascending: true })
+        .gt("appointment_date", today)
+        .limit(30);
+
+      if (error) {
+        // appointment_date column may not exist — fall back to a general future query
+        const { data: fallback } = await supabase
+          .from("queue_tickets")
+          .select("*")
+          .eq("status", "waiting")
+          .order("created_at", { ascending: true })
+          .limit(30);
+        // Filter to anything whose appointment_time looks like a future date
+        const futureFallback = (fallback || []).filter((row: Record<string, string>) => {
+          // If row has appointment_date field, compare it
+          if (row.appointment_date) return row.appointment_date > today;
+          return false; // can't determine, skip
+        });
+        setUpcoming(futureFallback);
+      } else {
+        setUpcoming(data || []);
+      }
+    } finally {
+      setUpcomingLoading(false);
+    }
+  };
+
+  // also load upcoming on mount
+  useEffect(() => { fetchUpcoming(); }, []);
 
   // ── Auth: session gatekeeper ──────────────────────────────
   const [session, setSession] = useState<any>(null);
@@ -637,35 +883,56 @@ export default function AdminDashboard() {
   };
 
   const addWalkIn = async () => {
-    if (!walkInName) return;
-    // GAP 2 FIX: Persist walk-in to Supabase so it survives refresh and appears in history
-    const ticketNum = `W-${String(walkInCounter++).padStart(3, "0")}`;
+    if (!walkInName || walkInLoading) return;
+    setWalkInLoading(true);
+    setWalkInError(null);
+
+    // Use a timestamp-based suffix to avoid duplicate ticket numbers across hot-reloads
+    const suffix = String(Date.now()).slice(-4);
+    const ticketNum = `W-${suffix}`;
     const now = new Date();
     const apptTime = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    // Feature 4 fix: use walkInDepartment instead of always activeDepartment
+    const apptDate = now.toISOString().slice(0, 10); // YYYY-MM-DD
+
     const { data, error } = await supabase
       .from("queue_tickets")
       .insert([{
         ticket_number: ticketNum,
-        user_name: walkInName,
+        user_name: walkInName.trim(),
         service_type: walkInPurpose || "General",
         booking_type: "walkin",
         status: "waiting",
         department: walkInDepartment,
         appointment_time: apptTime,
+        appointment_date: apptDate,
       }])
       .select()
       .single();
+
+    setWalkInLoading(false);
+
     if (error) {
-      if (import.meta.env.DEV) console.warn("[DEV] Walk-in insert error:", error.message);
+      // Surface the error in the modal so the admin can see it
+      console.error("[ADMIN] Walk-in insert error:", error);
+      setWalkInError(
+        error.message.includes("violates row-level security")
+          ? "Permission denied. Check your Supabase RLS policies for queue_tickets."
+          : error.message.includes("column")
+          ? `DB column error: ${error.message}`
+          : `Insert failed: ${error.message}`
+      );
       return;
     }
-    setQueue((q) => [...q, rowToQueueItem(data, q.length)]);
+
+    // Success — update local queue
+    setQueue((q) => [...q, rowToQueueItem(data as Record<string, string>, q.length)]);
     setWalkInName("");
     setWalkInPurpose("");
+    setWalkInError(null);
     setWalkInDepartment(activeDepartment); // reset to default for next time
     setWalkInModal(false);
   };
+
 
   // Bug 5 fix: persist settings to localStorage
   const saveSettings = () => {
@@ -752,8 +1019,10 @@ export default function AdminDashboard() {
     (s) => s.department === activeDepartment
   );
 
-  const circumference = 2 * Math.PI * 38;
-  const dashOffset = circumference * (1 - graceTime / sGrace); // ← uses sGrace
+  // NOTE: GraceTimer, HistoryItemRow, and WindowOperationsCard are now
+  // stable top-level components defined above AdminDashboard.
+  // This eliminates the flicker caused by React recreating them on every state tick.
+
 
   const navItems = [
     { id: "dashboard", icon: LayoutDashboard, label: "Dashboard" },
@@ -762,471 +1031,6 @@ export default function AdminDashboard() {
     { id: "settings", icon: Settings, label: "Settings" },
   ];
 
-  // ── Grace Timer sub-component (uses sGrace for progress bar) ─
-  const GraceTimer = () => (
-    <div
-      style={{
-        background: noShowWarning
-          ? "rgba(239,68,68,0.12)"
-          : graceActive
-          ? "rgba(37,99,235,0.12)"
-          : "rgba(255,255,255,0.04)",
-        border: `1px solid ${
-          noShowWarning
-            ? "rgba(239,68,68,0.35)"
-            : graceActive
-            ? "rgba(37,99,235,0.25)"
-            : "rgba(255,255,255,0.08)"
-        }`,
-        borderRadius: 14,
-        padding: "14px 16px",
-        display: "flex",
-        alignItems: "center",
-        gap: 16,
-        transition: "all 0.4s ease",
-      }}
-    >
-      <div
-        style={{ position: "relative", width: 80, height: 80, flexShrink: 0 }}
-      >
-        <svg width="80" height="80" viewBox="0 0 80 80">
-          <circle
-            cx="40"
-            cy="40"
-            r="38"
-            fill="none"
-            stroke="rgba(255,255,255,0.06)"
-            strokeWidth="4"
-          />
-          <circle
-            className="grace-ring"
-            cx="40"
-            cy="40"
-            r="38"
-            fill="none"
-            stroke={
-              noShowWarning ? "#ef4444" : graceTime <= 5 ? "#f59e0b" : "#3b82f6"
-            }
-            strokeWidth="4"
-            strokeLinecap="round"
-            strokeDasharray={circumference}
-            strokeDashoffset={dashOffset}
-          />
-        </svg>
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          {noShowWarning ? (
-            <AlertTriangle size={22} color="#ef4444" className="noshow-pulse" />
-          ) : (
-            <>
-              <div
-                style={{
-                  fontFamily: "'Space Mono',monospace",
-                  fontSize: 20,
-                  fontWeight: 700,
-                  color: graceTime <= 5 ? "#fbbf24" : "white",
-                  lineHeight: 1,
-                }}
-              >
-                {graceTime}
-              </div>
-              <div
-                style={{
-                  fontSize: 9,
-                  color: "rgba(255,255,255,0.4)",
-                  fontWeight: 600,
-                  letterSpacing: "0.04em",
-                }}
-              >
-                SEC
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-      <div style={{ flex: 1 }}>
-        {noShowWarning ? (
-          <div className="noshow-pulse">
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 700,
-                color: "#f87171",
-                marginBottom: 4,
-              }}
-            >
-              ⚠ Grace Period Expired
-            </div>
-            <div
-              style={{
-                fontSize: 11,
-                color: "rgba(248,113,113,0.7)",
-                lineHeight: 1.5,
-                marginBottom: 10,
-              }}
-            >
-              User did not appear. Mark as No-Show or Recall.
-            </div>
-            <button
-              onClick={markNoShow}
-              className="ctrl-btn"
-              style={{
-                background: "rgba(239,68,68,0.25)",
-                border: "1px solid rgba(239,68,68,0.4)",
-                borderRadius: 8,
-                padding: "7px 14px",
-                color: "#fca5a5",
-                fontSize: 12,
-                fontWeight: 700,
-                cursor: "pointer",
-                fontFamily: "'Outfit',sans-serif",
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-              }}
-            >
-              <ShieldAlert size={13} /> Mark as No-Show
-            </button>
-          </div>
-        ) : graceActive ? (
-          <>
-            <div
-              style={{
-                fontSize: 12,
-                fontWeight: 600,
-                color: "rgba(255,255,255,0.8)",
-                marginBottom: 4,
-              }}
-            >
-              Grace Period Active
-            </div>
-            <div
-              style={{
-                height: 5,
-                background: "rgba(255,255,255,0.08)",
-                borderRadius: 99,
-                overflow: "hidden",
-                marginBottom: 6,
-              }}
-            >
-              <div
-                style={{
-                  height: "100%",
-                  width: `${(graceTime / sGrace) * 100}%`,
-                  background: graceTime <= 5 ? "#f59e0b" : "#3b82f6",
-                  borderRadius: 99,
-                  transition: "width 1s linear, background 0.3s ease",
-                }}
-              />
-            </div>
-            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
-              User has {graceTime}s to reach the window
-            </div>
-          </>
-        ) : (
-          <>
-            <div
-              style={{
-                fontSize: 12,
-                fontWeight: 600,
-                color: "rgba(255,255,255,0.5)",
-                marginBottom: 4,
-              }}
-            >
-              Timer Idle
-            </div>
-            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)" }}>
-              Call Next to start the grace timer
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-
-  // --- MINI HISTORY COMPONENT ---
-  const HistoryItem = ({ h }: { h: HistoryItem }) => {
-    const getStatusColor = (status: string) => {
-      switch (status) {
-        case "served":
-          return {
-            bg: "rgba(16,185,129,0.15)",
-            text: "#34d399",
-            border: "rgba(16,185,129,0.2)",
-          };
-        case "noshow":
-          return {
-            bg: "rgba(239,68,68,0.15)",
-            text: "#f87171",
-            border: "rgba(239,68,68,0.2)",
-          };
-        case "removed":
-          return {
-            bg: "rgba(100,116,139,0.15)",
-            text: "#94a3b8",
-            border: "rgba(100,116,139,0.2)",
-          };
-        default:
-          return {
-            bg: "rgba(100,116,139,0.15)",
-            text: "#94a3b8",
-            border: "rgba(100,116,139,0.2)",
-          };
-      }
-    };
-    const colors = getStatusColor(h.status);
-
-    return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          padding: "12px 20px",
-          borderBottom: "1px solid rgba(255,255,255,0.04)",
-        }}
-      >
-        <div
-          style={{
-            fontFamily: "'Space Mono',monospace",
-            fontSize: 11,
-            color: "rgba(255,255,255,0.4)",
-            fontWeight: 700,
-          }}
-        >
-          {h.ticket_number}
-        </div>
-        <div style={{ flex: 1 }}>
-          <div
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: "rgba(255,255,255,0.85)",
-            }}
-          >
-            {h.user_name}
-          </div>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
-            {h.appointment_time}
-          </div>
-        </div>
-        <div
-          style={{
-            background: colors.bg,
-            color: colors.text,
-            border: `1px solid ${colors.border}`,
-            fontSize: 9,
-            fontWeight: 800,
-            padding: "3px 8px",
-            borderRadius: 6,
-            letterSpacing: "0.04em",
-          }}
-        >
-          {h.status ? h.status.toUpperCase() : "UNKNOWN"}
-        </div>
-      </div>
-    );
-  };
-
-  // ── Window Operations card sub-component ─────────────────
-  const WindowOperationsCard = () => {
-    const windows = [
-      {
-        key: "cashier",
-        label: "Cashier Window",
-        status: cashierStatus,
-      },
-      {
-        key: "registrar",
-        label: "Registrar Window",
-        status: registrarStatus,
-      },
-    ];
-
-    return (
-      <div
-        className="fade-in"
-        style={{
-          background: "rgba(15,25,54,0.8)",
-          border: "1px solid rgba(255,255,255,0.08)",
-          borderRadius: 20,
-          padding: "20px",
-          marginBottom: 16,
-          animationDelay: "0.05s",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginBottom: 16,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <DoorOpen size={14} color="#a78bfa" />
-            <span
-              style={{
-                fontSize: 11,
-                color: "rgba(255,255,255,0.35)",
-                fontWeight: 700,
-                letterSpacing: "0.08em",
-              }}
-            >
-              WINDOW OPERATIONS
-            </span>
-          </div>
-          {windowStatusSaving && (
-            <span
-              style={{
-                fontSize: 10,
-                color: "rgba(255,255,255,0.3)",
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
-                fontStyle: "italic",
-              }}
-            >
-              <div
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  border: "1.5px solid rgba(255,255,255,0.3)",
-                  borderTop: "1.5px solid white",
-                  animation: "spin 0.7s linear infinite",
-                }}
-              />
-              Saving…
-            </span>
-          )}
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          {windows.map(({ key, label, status }) => {
-            const activeCfg = WIN_STATUS_CFG[status as WinStatusKey];
-            return (
-              <div
-                key={key}
-                style={{
-                  background: "rgba(255,255,255,0.03)",
-                  border: "1px solid rgba(255,255,255,0.07)",
-                  borderRadius: 14,
-                  padding: "14px 16px",
-                }}
-              >
-                {/* Window label + current status pill */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    marginBottom: 12,
-                  }}
-                >
-                  <span
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 700,
-                      color: "rgba(255,255,255,0.75)",
-                      letterSpacing: "-0.01em",
-                    }}
-                  >
-                    {label}
-                  </span>
-                  <span
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 5,
-                      background: activeCfg.bg,
-                      border: `1px solid ${activeCfg.border}`,
-                      borderRadius: 99,
-                      padding: "3px 10px",
-                      fontSize: 10,
-                      fontWeight: 700,
-                      color: activeCfg.color,
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: 5,
-                        height: 5,
-                        borderRadius: "50%",
-                        background: activeCfg.dotColor,
-                      }}
-                    />
-                    {activeCfg.label.toUpperCase()}
-                  </span>
-                </div>
-
-                {/* Three-option button group */}
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr 1fr 1fr",
-                    gap: 6,
-                  }}
-                >
-                  {(["open", "cutoff", "closed"] as WinStatusKey[]).map((opt) => {
-                    const cfg = WIN_STATUS_CFG[opt];
-                    const isActive = status === opt;
-                    const icons: Record<WinStatusKey, React.ElementType> = {
-                      open: DoorOpen,
-                      cutoff: Scissors,
-                      closed: DoorClosed,
-                    };
-                    const Icon = icons[opt];
-                    return (
-                      <button
-                        key={opt}
-                        className="win-opt-btn"
-                        onClick={() => updateWindowStatus(key, opt)}
-                        style={{
-                          padding: "9px 4px",
-                          borderRadius: 10,
-                          border: isActive
-                            ? `1.5px solid ${cfg.activeBorder}`
-                            : "1.5px solid rgba(255,255,255,0.07)",
-                          background: isActive
-                            ? cfg.activeBg
-                            : "rgba(255,255,255,0.03)",
-                          color: isActive ? cfg.color : "rgba(255,255,255,0.3)",
-                          fontSize: 11,
-                          fontWeight: isActive ? 700 : 500,
-                          cursor: "pointer",
-                          fontFamily: "'Outfit',sans-serif",
-                          display: "flex",
-                          flexDirection: "column",
-                          alignItems: "center",
-                          gap: 4,
-                          boxShadow: isActive
-                            ? `0 0 12px ${cfg.bg}`
-                            : "none",
-                          transition: "all 0.18s ease",
-                        }}
-                      >
-                        <Icon size={13} />
-                        {cfg.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
 
   // ╔═══════════════════════════════════════════════════════════╗
   // ║  renderDashboard                                         ║
@@ -1329,8 +1133,13 @@ export default function AdminDashboard() {
         ))}
       </div>
 
-      {/* ── Window Operations Card ── */}
-      <WindowOperationsCard />
+      {/* ── Window Operations Card (stable top-level, no flicker) ── */}
+      <WindowOperationsCard
+        cashierStatus={cashierStatus}
+        registrarStatus={registrarStatus}
+        windowStatusSaving={windowStatusSaving}
+        onUpdate={updateWindowStatus}
+      />
 
       {/* Now Serving + Controls */}
       <div
@@ -1480,7 +1289,13 @@ export default function AdminDashboard() {
                 </div>
               </div>
               <div style={{ marginTop: 18 }}>
-                <GraceTimer />
+                <GraceTimer
+                  graceTime={graceTime}
+                  graceActive={graceActive}
+                  noShowWarning={noShowWarning}
+                  sGrace={sGrace}
+                  onMarkNoShow={markNoShow}
+                />
               </div>
             </>
           ) : (
@@ -2017,9 +1832,77 @@ export default function AdminDashboard() {
           </div>
           <div style={{ maxHeight: 240, overflowY: "auto" }}>
             {history.map((h, i) => (
-              <HistoryItem key={i} h={h} />
+              <HistoryItemRow key={i} h={h} />
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* ── Upcoming Appointments (Bug C fix) ─────────────── */}
+      <div
+        className="fade-in"
+        style={{ background: "rgba(15,25,54,0.8)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 20, overflow: "hidden", marginTop: 16 }}
+      >
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 8 }}>
+          <Clock size={14} color="#fbbf24" />
+          <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.85)" }}>Upcoming Appointments</span>
+          {upcoming.length > 0 && (
+            <div style={{ background: "rgba(251,191,36,0.15)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: 99, padding: "2px 9px", fontSize: 11, color: "#fbbf24", fontWeight: 700 }}>
+              {upcoming.length}
+            </div>
+          )}
+          <button onClick={fetchUpcoming} style={{ marginLeft: "auto", fontSize: 11, color: "rgba(255,255,255,0.35)", background: "none", border: "none", cursor: "pointer", fontFamily: "'Outfit',sans-serif", display: "flex", alignItems: "center", gap: 5 }}>
+            <RotateCw size={11} /> Refresh
+          </button>
+        </div>
+        <div style={{ maxHeight: 280, overflowY: "auto" }}>
+          {upcomingLoading ? (
+            <div style={{ textAlign: "center", padding: "28px", fontSize: 12, color: "rgba(255,255,255,0.25)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.1)", borderTop: "2px solid rgba(255,255,255,0.5)", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
+              Loading upcoming appointments…
+            </div>
+          ) : upcoming.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "28px", fontSize: 12, color: "rgba(255,255,255,0.25)" }}>
+              No upcoming appointments found.{" "}
+              <span style={{ opacity: 0.6 }}>(Appointments with a future date will appear here)</span>
+            </div>
+          ) : (
+            (() => {
+              // Group by appointment_date
+              const groups: Record<string, HistoryItem[]> = {};
+              upcoming.forEach((item) => {
+                const d = (item as Record<string, string>).appointment_date || "Unknown";
+                if (!groups[d]) groups[d] = [];
+                groups[d].push(item);
+              });
+              return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b)).map(([date, items]) => (
+                <div key={date}>
+                  <div style={{ padding: "8px 20px 4px", fontSize: 10, fontWeight: 800, color: "#fbbf24", letterSpacing: "0.08em", background: "rgba(251,191,36,0.05)", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                    {date === "Unknown" ? "DATE UNKNOWN" : new Date(date + "T00:00:00").toLocaleDateString("en-PH", { weekday: "long", month: "long", day: "numeric", year: "numeric" }).toUpperCase()}
+                    <span style={{ marginLeft: 8, opacity: 0.6, fontWeight: 600 }}>{items.length} ticket{items.length !== 1 ? "s" : ""}</span>
+                  </div>
+                  {items.map((h, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 20px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                      <div style={{ fontFamily: "'Space Mono',monospace", fontSize: 11, color: "rgba(255,255,255,0.4)", fontWeight: 700, minWidth: 60 }}>
+                        {(h as Record<string, string>).ticket_number || "—"}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>{(h as Record<string, string>).user_name || "—"}</div>
+                        <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", display: "flex", gap: 8, marginTop: 2 }}>
+                          <span>{h.appointment_time || ""}</span>
+                          {(h as Record<string, string>).department && <span style={{ color: "#818cf8" }}>· {(h as Record<string, string>).department}</span>}
+                          {h.service_type && <span>· {h.service_type}</span>}
+                        </div>
+                      </div>
+                      <div style={{ background: "rgba(251,191,36,0.12)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.25)", fontSize: 9, fontWeight: 800, padding: "3px 8px", borderRadius: 6, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
+                        UPCOMING
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ));
+            })()
+          )}
         </div>
       </div>
     </div>
@@ -4862,51 +4745,30 @@ export default function AdminDashboard() {
                 />
               </div>
             </div>
+            {/* Error display (Bug B fix) */}
+            {walkInError && (
+              <div style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "#f87171", lineHeight: 1.5 }}>
+                ⚠ {walkInError}
+              </div>
+            )}
             <div style={{ display: "flex", gap: 8 }}>
               <button
-                onClick={() => setWalkInModal(false)}
-                style={{
-                  flex: 1,
-                  padding: "12px",
-                  borderRadius: 11,
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  background: "rgba(255,255,255,0.05)",
-                  color: "rgba(255,255,255,0.6)",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  fontFamily: "'Outfit',sans-serif",
-                }}
+                onClick={() => { setWalkInModal(false); setWalkInError(null); }}
+                style={{ flex: 1, padding: "12px", borderRadius: 11, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}
               >
                 Cancel
               </button>
               <button
                 onClick={addWalkIn}
-                disabled={!walkInName}
+                disabled={!walkInName || walkInLoading}
                 className="ctrl-btn"
-                style={{
-                  flex: 2,
-                  padding: "12px",
-                  borderRadius: 11,
-                  border: "none",
-                  background: !walkInName
-                    ? "rgba(167,139,250,0.2)"
-                    : "linear-gradient(135deg,#7c3aed,#6d28d9)",
-                  color: "white",
-                  fontSize: 13,
-                  fontWeight: 700,
-                  cursor: walkInName ? "pointer" : "not-allowed",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 8,
-                  fontFamily: "'Outfit',sans-serif",
-                  boxShadow: walkInName
-                    ? "0 6px 20px rgba(124,58,237,0.4)"
-                    : "none",
-                }}
+                style={{ flex: 2, padding: "12px", borderRadius: 11, border: "none", background: (!walkInName || walkInLoading) ? "rgba(167,139,250,0.2)" : "linear-gradient(135deg,#7c3aed,#6d28d9)", color: "white", fontSize: 13, fontWeight: 700, cursor: (walkInName && !walkInLoading) ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontFamily: "'Outfit',sans-serif", boxShadow: (walkInName && !walkInLoading) ? "0 6px 20px rgba(124,58,237,0.4)" : "none" }}
               >
-                <UserPlus size={14} /> Add to Queue
+                {walkInLoading ? (
+                  <><div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.3)", borderTop: "2px solid white", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} /> Adding…</>
+                ) : (
+                  <><UserPlus size={14} /> Add to Queue</>
+                )}
               </button>
             </div>
           </div>
