@@ -885,15 +885,22 @@ export default function AdminDashboard() {
     // NOTE: appointment_date column does not exist in queue_tickets
     // Only send columns that exist in the schema
 
+    // Walk-in users have no real account — generate a placeholder UUID
+    const walkInAccountId = crypto.randomUUID();
+    // Map department label to destination_window value used by the DB
+    const destinationWindow = walkInDepartment === "Cashier" ? "Cashier" : "Registrar";
+
     const { data, error } = await supabase
       .from("queue_tickets")
       .insert([{
         ticket_number: ticketNum,
         user_name: walkInName.trim(),
+        account_id: walkInAccountId,     // required NOT NULL — placeholder for walk-ins
         service_type: walkInPurpose || "General",
         booking_type: "walkin",
         status: "waiting",
         department: walkInDepartment,
+        destination_window: destinationWindow,
         appointment_time: apptTime,
       }])
       .select()
@@ -902,16 +909,18 @@ export default function AdminDashboard() {
     setWalkInLoading(false);
 
     if (error) {
-      // Surface the error in the modal so the admin can see it
       console.error("[ADMIN] Walk-in insert error:", error);
       setWalkInError(
         error.message.includes("violates row-level security")
           ? "Permission denied. Check your Supabase RLS policies for queue_tickets."
+          : error.message.includes("not-null constraint")
+          ? `Missing required field: ${error.message.split('"')[1] ?? "unknown column"}`
           : error.message.includes("column")
           ? `DB column error: ${error.message}`
           : `Insert failed: ${error.message}`
       );
       return;
+
     }
 
     // Success — update local queue
