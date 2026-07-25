@@ -528,30 +528,34 @@ export default function AdminDashboard() {
     }
   }, [activeNav]);
 
-  // ── Bug C fix: Fetch upcoming (future-date) appointments ──────
-  // The queue_tickets table has no appointment_date column.
-  // "Upcoming" = waiting tickets whose created_at date is AFTER today
-  // (the SAS booking system inserts future-dated tickets in advance).
+  // ── Fetch upcoming (future-date) appointments ──────────────
+  // Student side encodes future booking dates as "YYYY-MM-DDThh:mm AM" in
+  // appointment_time. Today's bookings use plain "9:00 AM" (no "T" prefix).
+  // We query ALL waiting tickets and filter client-side by the date prefix.
   const fetchUpcoming = async () => {
     setUpcomingLoading(true);
     try {
-      const todayEnd = new Date();
-      todayEnd.setHours(23, 59, 59, 999);
-      const todayEndISO = todayEnd.toISOString();
+      const today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
 
       const { data, error } = await supabase
         .from("queue_tickets")
         .select("*")
         .eq("status", "waiting")
-        .gt("created_at", todayEndISO)   // created AFTER end of today
-        .order("created_at", { ascending: true })
-        .limit(50);
+        .order("appointment_time", { ascending: true })
+        .limit(100);
 
       if (error) {
         if (import.meta.env.DEV) console.warn("[DEV] fetchUpcoming error:", error.message);
         setUpcoming([]);
       } else {
-        setUpcoming(data || []);
+        // Future appointments have "T" in appointment_time (e.g. "2026-07-27T9:00 AM")
+        const future = (data || []).filter((row: Record<string, string>) => {
+          const apptTime = row.appointment_time || "";
+          if (!apptTime.includes("T")) return false;
+          const datePart = apptTime.split("T")[0]; // "YYYY-MM-DD"
+          return datePart > today;
+        });
+        setUpcoming(future);
       }
     } finally {
       setUpcomingLoading(false);
@@ -1867,12 +1871,12 @@ export default function AdminDashboard() {
             </div>
           ) : (
             (() => {
-              // Group by the date portion of created_at
+              // Group by the date portion of appointment_time
+              // Future bookings store: "YYYY-MM-DDThh:mm AM" (student side convention)
               const groups: Record<string, HistoryItem[]> = {};
               upcoming.forEach((item) => {
-                // Use created_at date as the group key (no appointment_date column in DB)
-                const createdAt = item.created_at || "";
-                const d = createdAt ? createdAt.slice(0, 10) : "Unknown";
+                const apptTime = item.appointment_time || "";
+                const d = apptTime.includes("T") ? apptTime.split("T")[0] : "Unknown";
                 if (!groups[d]) groups[d] = [];
                 groups[d].push(item);
               });
@@ -1882,27 +1886,33 @@ export default function AdminDashboard() {
                     {date === "Unknown" ? "DATE UNKNOWN" : new Date(date + "T00:00:00").toLocaleDateString("en-PH", { weekday: "long", month: "long", day: "numeric", year: "numeric" }).toUpperCase()}
                     <span style={{ marginLeft: 8, opacity: 0.6, fontWeight: 600 }}>{items.length} ticket{items.length !== 1 ? "s" : ""}</span>
                   </div>
-                  {items.map((h, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 20px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                      <div style={{ fontFamily: "'Space Mono',monospace", fontSize: 11, color: "rgba(255,255,255,0.4)", fontWeight: 700, minWidth: 60 }}>
-                        {(h as Record<string, string>).ticket_number || "—"}
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>{(h as Record<string, string>).user_name || "—"}</div>
-                        <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", display: "flex", gap: 8, marginTop: 2 }}>
-                          <span>{h.appointment_time || ""}</span>
-                          {(h as Record<string, string>).department && <span style={{ color: "#818cf8" }}>· {(h as Record<string, string>).department}</span>}
-                          {h.service_type && <span>· {h.service_type}</span>}
+                  {items.map((h, i) => {
+                    const rawApptTime = h.appointment_time || "";
+                    // Strip the date prefix to show only time (e.g. "9:00 AM")
+                    const displayTime = rawApptTime.includes("T") ? rawApptTime.split("T")[1] : rawApptTime;
+                    return (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 20px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                        <div style={{ fontFamily: "'Space Mono',monospace", fontSize: 11, color: "rgba(255,255,255,0.4)", fontWeight: 700, minWidth: 60 }}>
+                          {(h as Record<string, string>).ticket_number || "—"}
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>{(h as Record<string, string>).user_name || "—"}</div>
+                          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", display: "flex", gap: 8, marginTop: 2 }}>
+                            <span>{displayTime}</span>
+                            {(h as Record<string, string>).department && <span style={{ color: "#818cf8" }}>· {(h as Record<string, string>).department}</span>}
+                            {h.service_type && <span>· {h.service_type}</span>}
+                          </div>
+                        </div>
+                        <div style={{ background: "rgba(251,191,36,0.12)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.25)", fontSize: 9, fontWeight: 800, padding: "3px 8px", borderRadius: 6, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
+                          UPCOMING
                         </div>
                       </div>
-                      <div style={{ background: "rgba(251,191,36,0.12)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.25)", fontSize: 9, fontWeight: 800, padding: "3px 8px", borderRadius: 6, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
-                        UPCOMING
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ));
             })()
+
           )}
         </div>
       </div>
