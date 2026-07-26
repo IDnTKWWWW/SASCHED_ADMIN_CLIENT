@@ -3763,16 +3763,22 @@ export default function AdminDashboard() {
             </SettingRow>
             <SettingRow
               label="Active Terminal / Window"
-              hint="The service window this admin panel is controlling right now."
+              hint="Switch windows quickly from the header bar at the top of any page."
             >
-              <StyledSelect
-                value={sWindow}
-                onChange={setSWindow}
-                options={[
-                  { value: "1", label: "Window 1 — Cashier" },
-                  { value: "2", label: "Window 2 — Registrar" },
-                ]}
-              />
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "rgba(255,255,255,0.35)",
+                  background: "rgba(255,255,255,0.04)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: 8,
+                  padding: "6px 12px",
+                  fontStyle: "italic",
+                }}
+              >
+                {sWindow === "1" ? "Window 1 — Cashier" : "Window 2 — Registrar"}
+                <span style={{ marginLeft: 8, opacity: 0.5 }}>↑ Use header switcher</span>
+              </div>
             </SettingRow>
             <SettingRow
               label="Maximum Queue Capacity"
@@ -4581,6 +4587,55 @@ export default function AdminDashboard() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {/* ── Active Window Switcher (moved from Settings for quick access) ── */}
+            {!showLogoutConfirm && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  background: "rgba(255,255,255,0.06)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: 12,
+                  padding: 4,
+                  gap: 3,
+                }}
+              >
+                <span style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", fontWeight: 700, letterSpacing: "0.05em", paddingLeft: 6, paddingRight: 2 }}>WINDOW</span>
+                {(["1", "2"] as const).map((w) => {
+                  const label = w === "1" ? "Cashier" : "Registrar";
+                  const isActive = sWindow === w;
+                  return (
+                    <button
+                      key={w}
+                      onClick={() => {
+                        setSWindow(w);
+                        localStorage.setItem("admin_sWindow", w);
+                      }}
+                      style={{
+                        padding: "5px 14px",
+                        borderRadius: 8,
+                        border: "none",
+                        background: isActive
+                          ? w === "1" ? "rgba(59,130,246,0.8)" : "rgba(139,92,246,0.8)"
+                          : "transparent",
+                        color: isActive ? "white" : "rgba(255,255,255,0.4)",
+                        fontSize: 12,
+                        fontWeight: isActive ? 700 : 500,
+                        cursor: "pointer",
+                        fontFamily: "'Outfit',sans-serif",
+                        transition: "all 0.18s ease",
+                        boxShadow: isActive
+                          ? w === "1" ? "0 2px 10px rgba(59,130,246,0.4)" : "0 2px 10px rgba(139,92,246,0.4)"
+                          : "none",
+                        letterSpacing: "-0.01em",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             {showLogoutConfirm ? (
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ fontSize: 12, color: "rgba(255,255,255,0.55)" }}>Log out?</span>
