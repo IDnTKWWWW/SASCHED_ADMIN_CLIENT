@@ -80,8 +80,7 @@ interface HistoryItem {
 }
 
 // ─── HELPERS ────────────────────────────────────────────────────────────────
-let walkInCounter = 3;
-// makeWalkIn is no longer used — walk-ins now insert directly into Supabase
+// Walk-ins now insert directly into Supabase — no local counter needed
 
 
 // ─── CSS ──────────────────────────────────────────────────────────────────────
@@ -132,6 +131,7 @@ const CSS = `
   @keyframes toastIn { from{opacity:0;transform:translateY(8px) scale(0.96);}to{opacity:1;transform:translateY(0) scale(1);} }
   .win-opt-btn { transition: all 0.18s ease; cursor: pointer; }
   .win-opt-btn:hover { filter: brightness(1.12); transform: translateY(-1px); }
+  @keyframes spin { to { transform: rotate(360deg); } }
 `;
 
 // ─── SMALL ATOMS ─────────────────────────────────────────────────────────────
@@ -457,6 +457,8 @@ export default function AdminDashboard() {
   const [lqProgram, setLqProgram] = useState("all");
   const [lqType, setLqType] = useState("all");
   const [lqSort, setLqSort] = useState("position");
+  // Bug 7 fix: department filter state
+  const [lqDeptSel, setLqDeptSel] = useState("all");
   // History filters
   const [hSearch, setHSearch] = useState("");
   const [hStatus, setHStatus] = useState("all");
@@ -688,11 +690,44 @@ export default function AdminDashboard() {
       }
     };
 
+    // Bug 2 fix: restore the currently-serving ticket on page refresh so it
+    // doesn't go into limbo (ticket stuck as "serving" with no admin showing it)
+    const restoreServing = async () => {
+      const { data } = await supabase
+        .from("queue_tickets")
+        .select("*")
+        .eq("status", "serving")
+        .maybeSingle();
+      if (data) {
+        setServing(rowToQueueItem(data as Record<string, string>, 0));
+        setGraceActive(false);
+        setNoShowWarning(false);
+      }
+    };
+
+    // Bug 1 fix: initialize Served Today and No-Shows from today's DB data
+    // so the counters survive a page refresh
+    const initTodayStats = async () => {
+      const todayStr = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+      const { data } = await supabase
+        .from("queue_tickets")
+        .select("status")
+        .in("status", ["served", "noshow"])
+        .gte("created_at", todayStr + "T00:00:00.000Z")
+        .lte("created_at", todayStr + "T23:59:59.999Z");
+      if (data) {
+        setTotalServed(data.filter((r: Record<string, string>) => r.status === "served").length);
+        setNoShows(data.filter((r: Record<string, string>) => r.status === "noshow").length);
+      }
+    };
+
     fetchQueue();
     fetchWindowStatus();
+    restoreServing();
+    initTodayStats();
   }, []);
 
-  // ── Realtime subscriptions: INSERT + UPDATE (Feature 3) ───
+  // ── Realtime subscriptions: INSERT + UPDATE + upcoming auto-refresh ─
   useEffect(() => {
     const channel = supabase
       .channel("queue_tickets_changes")
@@ -702,13 +737,32 @@ export default function AdminDashboard() {
         (payload) => {
           const newRow = payload.new as Record<string, string>;
           if (newRow.status !== "waiting") return;
+
+          // Add to live queue
           setQueue((prev) => {
             const item = rowToQueueItem(newRow, prev.length);
             return [...prev, item];
           });
+
+          // Feature 3 fix: if the new ticket has a future appointment_time,
+          // automatically add it to the Upcoming Appointments panel
+          const apptTime = newRow.appointment_time || "";
+          const today = new Date().toISOString().slice(0, 10);
+          if (apptTime.includes("T")) {
+            const datePart = apptTime.split("T")[0];
+            if (datePart > today) {
+              setUpcoming((prev) => {
+                // Avoid duplicates
+                if (prev.some((u) => (u as Record<string, string>).id === newRow.id)) return prev;
+                return [...prev, newRow as unknown as HistoryItem].sort((a, b) =>
+                  (a.appointment_time ?? "").localeCompare(b.appointment_time ?? "")
+                );
+              });
+            }
+          }
         }
       )
-      // Feature 3: remove cancelled/terminal tickets in real time
+      // Remove cancelled/terminal tickets in real time
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "queue_tickets" },
@@ -718,6 +772,10 @@ export default function AdminDashboard() {
           if (terminal.includes(updated.status)) {
             setQueue((prev) => prev.filter((s) => s.ticket !== updated.ticket_number));
           }
+          // If a future ticket gets removed/served/cancelled, pull it from upcoming too
+          setUpcoming((prev) =>
+            prev.filter((u) => (u as Record<string, string>).id !== updated.id)
+          );
         }
       )
       .subscribe();
@@ -1923,18 +1981,21 @@ export default function AdminDashboard() {
   // ║  renderLiveQueue                                         ║
   // ╚═══════════════════════════════════════════════════════════╝
   const renderLiveQueue = () => {
+    // Bug 7 fix: department filter so admin can isolate Cashier vs Registrar
+    const lqDeptFilter = (s: QueueItem) =>
+      lqDeptSel === "all" || s.department === lqDeptSel;
+
     const filtered = queue
       .filter((s) => {
         const q = lqSearch.toLowerCase();
-        // Bug 1 fix: s.course didn't exist — use s.service_type
         const ms =
           (s.name ?? "").toLowerCase().includes(q) ||
           (s.ticket ?? "").toLowerCase().includes(q) ||
           (s.service_type ?? "").toLowerCase().includes(q);
-        // Bug 1 fix: lqProgram filter was comparing against s.course (undefined)
         const mp = lqProgram === "all" || s.service_type === lqProgram;
         const mt = lqType === "all" || s.type === lqType;
-        return ms && mp && mt;
+        const md = lqDeptFilter(s);
+        return ms && mp && mt && md;
       })
       .sort((a, b) => {
         if (lqSort === "name") return a.name.localeCompare(b.name);
@@ -1942,19 +2003,19 @@ export default function AdminDashboard() {
         return a.eta - b.eta;
       });
 
-    // Count by purpose type
     const purposeCounts = PURPOSE_OPTIONS.reduce((acc, p) => {
       acc[p] = queue.filter((s) => s.service_type === p).length;
       return acc;
     }, {} as Record<string, number>);
-    void purposeCounts; // available for future filtering
+    void purposeCounts;
     const walkCnt = queue.filter((s) => s.type === "walkin").length;
     const clearFilters = () => {
       setLqSearch("");
       setLqProgram("all");
       setLqType("all");
+      setLqDeptSel("all");
     };
-    const filtersActive = lqSearch || lqProgram !== "all" || lqType !== "all";
+    const filtersActive = lqSearch || lqProgram !== "all" || lqType !== "all" || lqDeptSel !== "all";
 
     return (
       <div
@@ -2208,6 +2269,36 @@ export default function AdminDashboard() {
                 }}
               />
             </div>
+            {/* Bug 7 fix: Department filter chips */}
+            <div style={{ display: "flex", gap: 6 }}>
+              {(["all", "Cashier", "Registrar"] as const).map((dept) => (
+                <button
+                  key={dept}
+                  onClick={() => setLqDeptSel(dept)}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 10,
+                    border: lqDeptSel === dept
+                      ? dept === "Cashier" ? "1px solid rgba(59,130,246,0.6)" : dept === "Registrar" ? "1px solid rgba(167,139,250,0.6)" : "1px solid rgba(255,255,255,0.3)"
+                      : "1px solid rgba(255,255,255,0.1)",
+                    background: lqDeptSel === dept
+                      ? dept === "Cashier" ? "rgba(59,130,246,0.15)" : dept === "Registrar" ? "rgba(167,139,250,0.15)" : "rgba(255,255,255,0.1)"
+                      : "rgba(255,255,255,0.04)",
+                    color: lqDeptSel === dept
+                      ? dept === "Cashier" ? "#93c5fd" : dept === "Registrar" ? "#c4b5fd" : "rgba(255,255,255,0.8)"
+                      : "rgba(255,255,255,0.35)",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    fontFamily: "'Outfit',sans-serif",
+                    transition: "all 0.15s ease",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {dept === "all" ? "All Windows" : dept}
+                </button>
+              ))}
+            </div>
             {filtersActive && (
               <button
                 onClick={clearFilters}
@@ -2378,10 +2469,9 @@ export default function AdminDashboard() {
                     </div>
                     <LevelBadge service_type={s.service_type} />
                     <TypeBadge type={s.type} />
-                    <div
-                      style={{ fontSize: 10, color: "rgba(255,255,255,0.3)" }}
-                    >
-                      {s.service_type || "General"}
+                    <div style={{ fontSize: 10, fontWeight: 600, color: s.department === "Cashier" ? "#60a5fa" : "#a78bfa" }}>
+                      {/* Bug 5 fix: show department (Cashier/Registrar), not service_type */}
+                      {s.department || "—"}
                     </div>
                     <div
                       style={{ display: "flex", justifyContent: "flex-end" }}
@@ -2653,12 +2743,12 @@ export default function AdminDashboard() {
         style={{ flex: 1, overflowY: "auto", padding: "20px 24px 32px" }}
         className="fade-in"
       >
-        {/* Analytics cards — 3 columns */}
+        {/* Analytics cards — 4 columns */}
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 1fr 1fr",
-            gap: 24,
+            gridTemplateColumns: "1fr 1fr 1fr 1fr",
+            gap: 16,
             marginBottom: 32,
           }}
         >
@@ -2775,6 +2865,46 @@ export default function AdminDashboard() {
                 </div>
                 <div style={{ fontSize: 24, fontWeight: 800, color: "white" }}>
                   {historyStats.noShowRate}%
+                </div>
+              </div>
+            </div>
+          </div>
+          {/* Bug 6 fix: avgResolution 4th analytics card */}
+          <div
+            className="card-shadow"
+            style={{
+              background: "rgba(15,25,54,0.8)",
+              borderRadius: 16,
+              border: "1px solid rgba(255,255,255,0.08)",
+              padding: 24,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div
+                style={{
+                  width: 42,
+                  height: 42,
+                  borderRadius: 12,
+                  background: "rgba(251,191,36,0.15)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Clock size={20} color="#fbbf24" />
+              </div>
+              <div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: "rgba(255,255,255,0.4)",
+                  }}
+                >
+                  Avg. Resolution
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: "white" }}>
+                  {avgResolution}
                 </div>
               </div>
             </div>
@@ -3155,7 +3285,8 @@ export default function AdminDashboard() {
                 No history logs available.
               </div>
             ) : (
-              history.map((log, i) => (
+            // Bug 3 fix: iterate filtered (respects search + filters), not history (shows all)
+              filtered.map((log, i) => (
                 <div
                   key={log.id || i}
                   style={{
