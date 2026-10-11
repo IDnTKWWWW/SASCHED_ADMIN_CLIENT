@@ -45,7 +45,21 @@ import {
   Scissors,
   FileDown,
   Trash2 as TrashIcon,
+  Printer,
+  Volume2,
+  VolumeX,
+  XCircle,
 } from "lucide-react";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Cell,
+  CartesianGrid,
+} from "recharts";
 
 // ─── PURPOSE OPTIONS ─────────────────────────────────────────────────────────
 const PURPOSE_OPTIONS = ["General", "Premium Support", "Consultation", "Billing"];
@@ -61,6 +75,7 @@ interface QueueItem {
   eta: number;
   calledAt: string | null;
   department: string;
+  id?: string;
 }
 interface HistoryItem {
   ticket?: string;
@@ -80,7 +95,94 @@ interface HistoryItem {
 }
 
 // ─── HELPERS ────────────────────────────────────────────────────────────────
-// Walk-ins now insert directly into Supabase — no local counter needed
+const getLocalTodayDateStr = () => {
+  const now = new Date();
+  const yr = now.getFullYear();
+  const mo = String(now.getMonth() + 1).padStart(2, "0");
+  const dy = String(now.getDate()).padStart(2, "0");
+  return `${yr}-${mo}-${dy}`;
+};
+
+const getNowTimeStr = () => {
+  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
+const isTodayAppointment = (appointmentTime?: string) => {
+  if (!appointmentTime) return true;
+  if (!appointmentTime.includes("T")) return true;
+  const datePart = appointmentTime.split("T")[0];
+  return datePart <= getLocalTodayDateStr();
+};
+
+let sharedAudioCtx: AudioContext | null = null;
+const getSharedAudioCtx = (): AudioContext | null => {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return null;
+    if (!sharedAudioCtx || sharedAudioCtx.state === "closed") {
+      sharedAudioCtx = new AudioCtx();
+    }
+    if (sharedAudioCtx.state === "suspended") {
+      sharedAudioCtx.resume().catch(() => {});
+    }
+    return sharedAudioCtx;
+  } catch (_) {
+    return null;
+  }
+};
+
+const playChime = (type: "call" | "alert" | "complete") => {
+  try {
+    const ctx = getSharedAudioCtx();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    if (type === "call") {
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc1.type = "sine";
+      osc2.type = "sine";
+      osc1.frequency.setValueAtTime(523.25, now); // C5
+      osc1.frequency.setValueAtTime(659.25, now + 0.15); // E5
+      osc2.frequency.setValueAtTime(1046.5, now); // C6
+      osc2.frequency.setValueAtTime(1318.5, now + 0.15); // E6
+      gain.gain.setValueAtTime(0.22, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(ctx.destination);
+      osc1.start(now);
+      osc2.start(now);
+      osc1.stop(now + 0.8);
+      osc2.stop(now + 0.8);
+    } else if (type === "alert") {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(440, now);
+      osc.frequency.setValueAtTime(330, now + 0.18);
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.6);
+    } else if (type === "complete") {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(587.33, now);
+      osc.frequency.setValueAtTime(880, now + 0.12);
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.5);
+    }
+  } catch (_) {}
+};
+
 
 
 // ─── CSS ──────────────────────────────────────────────────────────────────────
@@ -112,14 +214,14 @@ const CSS = `
   .modal-backdrop { animation:backdropIn 0.25s ease; }
   @keyframes backdropIn { from{opacity:0;}to{opacity:1;} }
   input,select { outline:none; transition:all 0.2s ease; }
-  input:focus,select:focus { box-shadow:0 0 0 2px rgba(59,130,246,0.4); }
+  input:focus,select:focus { box-shadow:0 0 0 2px var(--focus-ring, rgba(59,130,246,0.4)); }
   .grace-ring { transform-origin:center; transform:rotate(-90deg); transition:stroke-dashoffset 1s linear; }
   .queue-row { transition:background 0.15s ease; }
   .queue-row:hover { background:rgba(255,255,255,0.03) !important; }
   .queue-row:hover .rm-btn { opacity:1 !important; }
   .rm-btn { opacity:0; transition:opacity 0.15s ease; }
   .lq-row { transition:background 0.15s ease; }
-  .lq-row:hover { background:rgba(59,130,246,0.05) !important; }
+  .lq-row:hover { background:var(--hover-glow, rgba(59,130,246,0.05)) !important; }
   .lq-row:hover .lq-rm { opacity:1 !important; }
   .lq-rm { opacity:0; transition:opacity 0.15s ease; }
   .filter-sel { appearance:none; cursor:pointer; }
@@ -129,9 +231,21 @@ const CSS = `
   .settings-row:hover { background:rgba(255,255,255,0.03); }
   .save-toast { animation:toastIn 0.35s cubic-bezier(.22,.68,0,1.2) forwards; }
   @keyframes toastIn { from{opacity:0;transform:translateY(8px) scale(0.96);}to{opacity:1;transform:translateY(0) scale(1);} }
-  .win-opt-btn { transition: all 0.18s ease; cursor: pointer; }
-  .win-opt-btn:hover { filter: brightness(1.12); transform: translateY(-1px); }
+  .win-opt-btn { transition: all 0.2s cubic-bezier(.22,.68,0,1.2); cursor: pointer; }
+  .win-opt-btn:hover:not(.active) { background: rgba(255,255,255,0.06) !important; color: rgba(255,255,255,0.85) !important; transform: translateY(-1px); }
+  .win-opt-btn:active { transform: translateY(1px); }
+  @keyframes beaconRadar { 0%{transform:scale(1);opacity:0.85;} 50%{opacity:0.4;} 100%{transform:scale(2.7);opacity:0;} }
+  @keyframes statusDotPulse { 0%,100%{transform:scale(1);opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,0.7);} 50%{transform:scale(1.15);opacity:0.85;box-shadow:0 0 0 4px rgba(34,197,94,0);} }
+  @keyframes statusAmberBreathe { 0%,100%{transform:scale(1);opacity:1;box-shadow:0 0 0 0 rgba(245,158,11,0.7);} 50%{transform:scale(1.15);opacity:0.85;box-shadow:0 0 0 4px rgba(245,158,11,0);} }
   @keyframes spin { to { transform: rotate(360deg); } }
+  @media print {
+    body * { visibility: hidden !important; }
+    #printable-slip, #printable-slip * { visibility: visible !important; }
+    #printable-slip { position: fixed !important; left: 0 !important; top: 0 !important; width: 100vw !important; height: auto !important; background: white !important; color: black !important; padding: 20px !important; }
+  }
+  @media (max-width: 1024px), (max-height: 768px) {
+    body, #root { overflow: auto !important; height: auto !important; }
+  }
 `;
 
 // ─── SMALL ATOMS ─────────────────────────────────────────────────────────────
@@ -183,30 +297,42 @@ type WinStatusKey = "open" | "cutoff" | "closed";
 const WIN_STATUS_CFG = {
   open: {
     label: "Open",
-    color: "#4ade80",
-    bg: "rgba(34,197,94,0.18)",
-    border: "rgba(34,197,94,0.4)",
-    activeBg: "rgba(34,197,94,0.22)",
-    activeBorder: "rgba(34,197,94,0.7)",
+    color: "#6ee7b7",
+    badgeBg: "linear-gradient(135deg, rgba(34,197,94,0.18), rgba(16,185,129,0.06))",
+    badgeBorder: "rgba(52,211,153,0.4)",
+    badgeGlow: "rgba(34,197,94,0.22)",
+    activeBg: "linear-gradient(135deg, rgba(16,185,129,0.28) 0%, rgba(5,150,105,0.12) 100%)",
+    activeBorder: "rgba(52,211,153,0.6)",
+    activeGlow: "0 4px 16px rgba(16,185,129,0.24), inset 0 1px 0 rgba(255,255,255,0.2)",
+    iconGlow: "drop-shadow(0 0 6px rgba(52,211,153,0.5))",
     dotColor: "#22c55e",
+    dotAnim: "statusDotPulse 2s ease-in-out infinite",
   },
   cutoff: {
     label: "Cut-off",
-    color: "#fbbf24",
-    bg: "rgba(251,191,36,0.14)",
-    border: "rgba(251,191,36,0.35)",
-    activeBg: "rgba(251,191,36,0.2)",
-    activeBorder: "rgba(251,191,36,0.65)",
+    color: "#fde68a",
+    badgeBg: "linear-gradient(135deg, rgba(245,158,11,0.18), rgba(217,119,6,0.06))",
+    badgeBorder: "rgba(251,191,36,0.4)",
+    badgeGlow: "rgba(245,158,11,0.22)",
+    activeBg: "linear-gradient(135deg, rgba(245,158,11,0.28) 0%, rgba(217,119,6,0.12) 100%)",
+    activeBorder: "rgba(251,191,36,0.6)",
+    activeGlow: "0 4px 16px rgba(245,158,11,0.24), inset 0 1px 0 rgba(255,255,255,0.2)",
+    iconGlow: "drop-shadow(0 0 6px rgba(251,191,36,0.5))",
     dotColor: "#f59e0b",
+    dotAnim: "statusAmberBreathe 2s ease-in-out infinite",
   },
   closed: {
     label: "Closed",
-    color: "#f87171",
-    bg: "rgba(239,68,68,0.12)",
-    border: "rgba(239,68,68,0.3)",
-    activeBg: "rgba(239,68,68,0.18)",
-    activeBorder: "rgba(239,68,68,0.6)",
+    color: "#fca5a5",
+    badgeBg: "linear-gradient(135deg, rgba(239,68,68,0.16), rgba(185,28,28,0.06))",
+    badgeBorder: "rgba(248,113,113,0.38)",
+    badgeGlow: "rgba(239,68,68,0.18)",
+    activeBg: "linear-gradient(135deg, rgba(239,68,68,0.24) 0%, rgba(185,28,28,0.1) 100%)",
+    activeBorder: "rgba(248,113,113,0.5)",
+    activeGlow: "0 4px 16px rgba(239,68,68,0.2), inset 0 1px 0 rgba(255,255,255,0.15)",
+    iconGlow: "drop-shadow(0 0 6px rgba(239,68,68,0.5))",
     dotColor: "#ef4444",
+    dotAnim: "none",
   },
 };
 
@@ -223,23 +349,28 @@ interface GraceTimerProps {
   noShowWarning: boolean;
   sGrace: number;
   onMarkNoShow: () => void;
+  isRegistrar?: boolean;
 }
-function GraceTimer({ graceTime, graceActive, noShowWarning, sGrace, onMarkNoShow }: GraceTimerProps) {
+function GraceTimer({ graceTime, graceActive, noShowWarning, sGrace, onMarkNoShow, isRegistrar }: GraceTimerProps) {
   const circumference = 2 * Math.PI * 38;
   const dashOffset = circumference * (1 - graceTime / sGrace);
+  const activeColor = isRegistrar ? "#a78bfa" : "#3b82f6";
+  const activeBg = isRegistrar ? "rgba(139,92,246,0.14)" : "rgba(37,99,235,0.12)";
+  const activeBorder = isRegistrar ? "rgba(167,139,250,0.35)" : "rgba(37,99,235,0.25)";
+
   return (
     <div
       style={{
         background: noShowWarning
           ? "rgba(239,68,68,0.12)"
           : graceActive
-          ? "rgba(37,99,235,0.12)"
+          ? activeBg
           : "rgba(255,255,255,0.04)",
         border: `1px solid ${
           noShowWarning
             ? "rgba(239,68,68,0.35)"
             : graceActive
-            ? "rgba(37,99,235,0.25)"
+            ? activeBorder
             : "rgba(255,255,255,0.08)"
         }`,
         borderRadius: 14,
@@ -256,7 +387,7 @@ function GraceTimer({ graceTime, graceActive, noShowWarning, sGrace, onMarkNoSho
           <circle
             className="grace-ring"
             cx="40" cy="40" r="38" fill="none"
-            stroke={noShowWarning ? "#ef4444" : graceTime <= 5 ? "#f59e0b" : "#3b82f6"}
+            stroke={noShowWarning ? "#ef4444" : graceTime <= 5 ? "#f59e0b" : activeColor}
             strokeWidth="4" strokeLinecap="round"
             strokeDasharray={circumference} strokeDashoffset={dashOffset}
           />
@@ -293,7 +424,7 @@ function GraceTimer({ graceTime, graceActive, noShowWarning, sGrace, onMarkNoSho
           <>
             <div style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.8)", marginBottom: 4 }}>Grace Period Active</div>
             <div style={{ height: 5, background: "rgba(255,255,255,0.08)", borderRadius: 99, overflow: "hidden", marginBottom: 6 }}>
-              <div style={{ height: "100%", width: `${(graceTime / sGrace) * 100}%`, background: graceTime <= 5 ? "#f59e0b" : "#3b82f6", borderRadius: 99, transition: "width 1s linear, background 0.3s ease" }} />
+              <div style={{ height: "100%", width: `${(graceTime / sGrace) * 100}%`, background: graceTime <= 5 ? "#f59e0b" : activeColor, borderRadius: 99, transition: "width 1s linear, background 0.3s ease" }} />
             </div>
             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>User has {graceTime}s to reach the window</div>
           </>
@@ -314,19 +445,24 @@ function HistoryItemRow({ h }: { h: HistoryItem }) {
     switch (status) {
       case "served": return { bg: "rgba(16,185,129,0.15)", text: "#34d399", border: "rgba(16,185,129,0.2)" };
       case "noshow": return { bg: "rgba(239,68,68,0.15)", text: "#f87171", border: "rgba(239,68,68,0.2)" };
+      case "cancelled": return { bg: "rgba(249,115,22,0.15)", text: "#fb923c", border: "rgba(249,115,22,0.3)" };
       case "removed": return { bg: "rgba(100,116,139,0.15)", text: "#94a3b8", border: "rgba(100,116,139,0.2)" };
       default: return { bg: "rgba(100,116,139,0.15)", text: "#94a3b8", border: "rgba(100,116,139,0.2)" };
     }
   };
   const colors = getStatusColor(h.status);
+  const ticket = h.ticket_number || h.ticket || "—";
+  const name = h.user_name || h.name || "Client";
+  const time = h.appointment_time || h.time || "—";
+
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 20px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
       <div style={{ fontFamily: "'Space Mono',monospace", fontSize: 11, color: "rgba(255,255,255,0.4)", fontWeight: 700 }}>
-        {h.ticket_number}
+        {ticket}
       </div>
       <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>{h.user_name}</div>
-        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{h.appointment_time}</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>{name}</div>
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{time}</div>
       </div>
       <div style={{ background: colors.bg, color: colors.text, border: `1px solid ${colors.border}`, fontSize: 9, fontWeight: 800, padding: "3px 8px", borderRadius: 6, letterSpacing: "0.04em" }}>
         {h.status ? h.status.toUpperCase() : "UNKNOWN"}
@@ -341,15 +477,24 @@ interface WindowOperationsCardProps {
   registrarStatus: string;
   windowStatusSaving: boolean;
   onUpdate: (dept: string, status: string) => void;
+  cardBg?: string;
+  cardBorder?: string;
 }
-function WindowOperationsCard({ cashierStatus, registrarStatus, windowStatusSaving, onUpdate }: WindowOperationsCardProps) {
+function WindowOperationsCard({ cashierStatus, registrarStatus, windowStatusSaving, onUpdate, cardBg, cardBorder }: WindowOperationsCardProps) {
   const windows = [
     { key: "cashier", label: "Cashier Window", status: cashierStatus },
     { key: "registrar", label: "Registrar Window", status: registrarStatus },
   ];
   return (
     <div
-      style={{ background: "rgba(15,25,54,0.8)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 20, padding: "20px", marginBottom: 16 }}
+      style={{
+        background: cardBg || "rgba(15,25,54,0.8)",
+        border: `1px solid ${cardBorder || "rgba(255,255,255,0.08)"}`,
+        borderRadius: 20,
+        padding: "20px",
+        marginBottom: 16,
+        transition: "background 0.35s ease, border-color 0.35s ease",
+      }}
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -363,19 +508,77 @@ function WindowOperationsCard({ cashierStatus, registrarStatus, windowStatusSavi
           </span>
         )}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
         {windows.map(({ key, label, status }) => {
           const activeCfg = WIN_STATUS_CFG[status as WinStatusKey];
           return (
-            <div key={key} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: "14px 16px" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: "rgba(255,255,255,0.75)", letterSpacing: "-0.01em" }}>{label}</span>
-                <span style={{ display: "flex", alignItems: "center", gap: 5, background: activeCfg.bg, border: `1px solid ${activeCfg.border}`, borderRadius: 99, padding: "3px 10px", fontSize: 10, fontWeight: 700, color: activeCfg.color }}>
-                  <div style={{ width: 5, height: 5, borderRadius: "50%", background: activeCfg.dotColor }} />
-                  {activeCfg.label.toUpperCase()}
+            <div
+              key={key}
+              style={{
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.07)",
+                borderRadius: 16,
+                padding: "16px 18px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 12,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.85)", letterSpacing: "-0.01em" }}>
+                  {label}
                 </span>
+                {/* Modern Holographic Status Pill */}
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    background: activeCfg.badgeBg,
+                    border: `1px solid ${activeCfg.badgeBorder}`,
+                    boxShadow: `0 2px 12px ${activeCfg.badgeGlow}, inset 0 1px 0 rgba(255,255,255,0.14)`,
+                    borderRadius: 99,
+                    padding: "3px 10px 3px 8px",
+                    backdropFilter: "blur(8px)",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: "50%",
+                      background: activeCfg.dotColor,
+                      boxShadow: `0 0 8px ${activeCfg.dotColor}`,
+                      animation: activeCfg.dotAnim,
+                    }}
+                  />
+                  <span
+                    style={{
+                      fontFamily: "'Space Mono', monospace",
+                      fontSize: 9.5,
+                      fontWeight: 700,
+                      letterSpacing: "0.09em",
+                      color: activeCfg.color,
+                    }}
+                  >
+                    {activeCfg.label.toUpperCase()}
+                  </span>
+                </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+
+              {/* Modern Cyber Console Dock */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr 1fr",
+                  gap: 4,
+                  background: "rgba(8, 12, 26, 0.65)",
+                  padding: 4,
+                  borderRadius: 12,
+                  border: "1px solid rgba(255,255,255,0.06)",
+                  backdropFilter: "blur(12px)",
+                }}
+              >
                 {(["open", "cutoff", "closed"] as WinStatusKey[]).map((opt) => {
                   const cfg = WIN_STATUS_CFG[opt];
                   const isActive = status === opt;
@@ -384,12 +587,35 @@ function WindowOperationsCard({ cashierStatus, registrarStatus, windowStatusSavi
                   return (
                     <button
                       key={opt}
-                      className="win-opt-btn"
+                      className={`win-opt-btn ${isActive ? "active" : ""}`}
                       onClick={() => onUpdate(key, opt)}
-                      style={{ padding: "9px 4px", borderRadius: 10, border: isActive ? `1.5px solid ${cfg.activeBorder}` : "1.5px solid rgba(255,255,255,0.07)", background: isActive ? cfg.activeBg : "rgba(255,255,255,0.03)", color: isActive ? cfg.color : "rgba(255,255,255,0.3)", fontSize: 11, fontWeight: isActive ? 700 : 500, cursor: "pointer", fontFamily: "'Outfit',sans-serif", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, boxShadow: isActive ? `0 0 12px ${cfg.bg}` : "none", transition: "all 0.18s ease" }}
+                      style={{
+                        padding: "8px 4px",
+                        borderRadius: 9,
+                        border: isActive ? `1px solid ${cfg.activeBorder}` : "1px solid transparent",
+                        background: isActive ? cfg.activeBg : "transparent",
+                        color: isActive ? cfg.color : "rgba(255,255,255,0.4)",
+                        fontSize: 11,
+                        fontWeight: isActive ? 700 : 500,
+                        cursor: "pointer",
+                        fontFamily: "'Outfit',sans-serif",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: 4,
+                        boxShadow: isActive ? cfg.activeGlow : "none",
+                        transition: "all 0.2s cubic-bezier(.22,.68,0,1.2)",
+                      }}
                     >
-                      <Icon size={13} />
-                      {cfg.label}
+                      <Icon
+                        size={14}
+                        style={{
+                          filter: isActive ? cfg.iconGlow : "none",
+                          transition: "filter 0.2s ease, transform 0.2s ease",
+                          transform: isActive ? "scale(1.08)" : "scale(1)",
+                        }}
+                      />
+                      <span style={{ letterSpacing: "0.01em" }}>{cfg.label}</span>
                     </button>
                   );
                 })}
@@ -408,64 +634,8 @@ function WindowOperationsCard({ cashierStatus, registrarStatus, windowStatusSavi
 export default function AdminDashboard() {
 
   const [activeNav, setActiveNav] = useState("dashboard");
-  const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [serving, setServing] = useState<QueueItem | null>(null);
-  const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [paused, setPaused] = useState(false);
-  const [graceActive, setGraceActive] = useState(false);
-  const [graceTime, setGraceTime] = useState(15);
-  const [noShowWarning, setNoShowWarning] = useState(false);
-  const [totalServed, setTotalServed] = useState(0);
-  const [noShows, setNoShows] = useState(0);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [walkInModal, setWalkInModal] = useState(false);
-  const [walkInName, setWalkInName] = useState("");
-  const [walkInPurpose, setWalkInPurpose] = useState("");
-  const [flash, setFlash] = useState(false);
-  const [recallPing, setRecallPing] = useState(false);
-  const [removeId, setRemoveId] = useState<string | null>(null);
-  // ── Remove confirm (Bug 6) ────────────────────────────────────
-  const [removeConfirmTicket, setRemoveConfirmTicket] = useState<string | null>(null);
-  // ── Logout two-step confirm (Bug 4) ──────────────────────────
-  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
-  // ── Clear queue confirm (Feature 1) ──────────────────────────
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
-  const [clearingQueue, setClearingQueue] = useState(false);
-  // ── Change-password modal state (Bug 3) ──────────────────────
-  const [pwCurrent, setPwCurrent] = useState("");
-  const [pwNew, setPwNew] = useState("");
-  const [pwConfirm, setPwConfirm] = useState("");
-  const [pwError, setPwError] = useState<string | null>(null);
-  const [pwSuccess, setPwSuccess] = useState(false);
-  const [pwLoading, setPwLoading] = useState(false);
-  // ── Walk-in department selector (Feature 4) ───────────────────
-  const [walkInDepartment, setWalkInDepartment] = useState("Cashier");
-  // ── Walk-in loading + error feedback (Bug B fix) ──────────────
-  const [walkInLoading, setWalkInLoading] = useState(false);
-  const [walkInError, setWalkInError] = useState<string | null>(null);
-  // ── Upcoming appointments (Bug C) ─────────────────────────────
-  const [upcoming, setUpcoming] = useState<HistoryItem[]>([]);
-  const [upcomingLoading, setUpcomingLoading] = useState(false);
 
-  // ── Window Status State ──────────────────────────────────
-  const [cashierStatus, setCashierStatus] = useState("open");
-  const [registrarStatus, setRegistrarStatus] = useState("open");
-  const [windowStatusSaving, setWindowStatusSaving] = useState(false);
-
-  // Live Queue filters
-  const [lqSearch, setLqSearch] = useState("");
-  const [lqProgram, setLqProgram] = useState("all");
-  const [lqType, setLqType] = useState("all");
-  const [lqSort, setLqSort] = useState("position");
-  // Bug 7 fix: department filter state
-  const [lqDeptSel, setLqDeptSel] = useState("all");
-  // History filters
-  const [hSearch, setHSearch] = useState("");
-  const [hStatus, setHStatus] = useState("all");
-  const [hLevel, setHLevel] = useState("all");
-  const [hSortCol, setHSortCol] = useState("time");
-  const [hSortDir, setHSortDir] = useState("desc");
-  // ── Settings state — Bug 5 fix: load from localStorage on mount ──
+  // ── Settings state — loaded from localStorage on mount ──
   const [sGrace, setSGrace] = useState<number>(() => {
     const v = localStorage.getItem("admin_sGrace");
     return v ? Number(v) : 15;
@@ -483,8 +653,161 @@ export default function AdminDashboard() {
   const [sAutoAdvance, setSAutoAdvance] = useState<boolean>(() =>
     localStorage.getItem("admin_sAutoAdvance") === "true"
   );
+  const [sAudio, setSAudio] = useState<boolean>(() =>
+    localStorage.getItem("admin_sAudio") !== "false"
+  );
   const [sPwModal, setSPwModal] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
+
+  // Audio chime trigger helper
+  const triggerChime = (type: "call" | "alert" | "complete") => {
+    if (sAudio) playChime(type);
+  };
+
+  // ── Dual-Window & Active Department ───────────────────────
+  const activeDepartment = sWindow === "1" ? "Cashier" : "Registrar";
+  const isRegistrar = activeDepartment === "Registrar";
+
+  // ── Theme Palettes: Cashier (Cobalt Blue) vs Registrar (Cyber Amethyst/Violet) ──
+  const theme = isRegistrar
+    ? {
+        isRegistrar: true,
+        bgRoot: "#0c0818",
+        bgSidebar: "linear-gradient(180deg, #180f33 0%, #0c0818 100%)",
+        bgHeader: "rgba(18, 12, 34, 0.95)",
+        bgCard: "rgba(27, 18, 52, 0.85)",
+        bgCardSubtle: "rgba(139, 92, 246, 0.06)",
+        borderCard: "rgba(167, 139, 250, 0.18)",
+        borderSubtle: "rgba(167, 139, 250, 0.1)",
+        primary: "#8b5cf6",
+        primaryLight: "#c084fc",
+        primaryLighter: "#e9d5ff",
+        primaryGradient: "linear-gradient(135deg, #7c3aed, #6d28d9)",
+        primaryGlow: "rgba(124, 58, 237, 0.45)",
+        terminalBg: "linear-gradient(145deg, #2a1154 0%, #1e0d3d 60%, #130826 100%)",
+        terminalBorder: "rgba(167, 139, 250, 0.45)",
+        terminalGlow: "0 0 40px rgba(147, 51, 234, 0.22)",
+        terminalOrb: "rgba(167, 139, 250, 0.12)",
+        activeNavBg: "rgba(139, 92, 246, 0.25)",
+        activeNavBorder: "rgba(167, 139, 250, 0.4)",
+        activeNavColor: "#c084fc",
+        statQueueBg: "rgba(139, 92, 246, 0.14)",
+        statQueueBorder: "rgba(167, 139, 250, 0.28)",
+        statQueueColor: "#a78bfa",
+        accentGlow: "rgba(147, 51, 234, 0.25)",
+        toggleActive: "rgba(124, 58, 237, 0.85)",
+        toggleBorder: "rgba(167, 139, 250, 0.7)",
+      }
+    : {
+        isRegistrar: false,
+        bgRoot: "#0d1526",
+        bgSidebar: "linear-gradient(180deg, #0f1d3a 0%, #0d1526 100%)",
+        bgHeader: "rgba(13, 21, 38, 0.95)",
+        bgCard: "rgba(15, 25, 54, 0.8)",
+        bgCardSubtle: "rgba(37, 99, 235, 0.05)",
+        borderCard: "rgba(255, 255, 255, 0.08)",
+        borderSubtle: "rgba(255, 255, 255, 0.05)",
+        primary: "#2563eb",
+        primaryLight: "#60a5fa",
+        primaryLighter: "#bfdbfe",
+        primaryGradient: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+        primaryGlow: "rgba(37, 99, 235, 0.4)",
+        terminalBg: "linear-gradient(145deg, #0f2057 0%, #0d1a40 60%, #0a1630 100%)",
+        terminalBorder: "rgba(37, 99, 235, 0.35)",
+        terminalGlow: "0 0 40px rgba(37, 99, 235, 0.1)",
+        terminalOrb: "rgba(37, 99, 235, 0.08)",
+        activeNavBg: "rgba(37, 99, 235, 0.25)",
+        activeNavBorder: "rgba(37, 99, 235, 0.3)",
+        activeNavColor: "#60a5fa",
+        statQueueBg: "rgba(37, 99, 235, 0.1)",
+        statQueueBorder: "rgba(37, 99, 235, 0.2)",
+        statQueueColor: "#3b82f6",
+        accentGlow: "rgba(37, 99, 235, 0.2)",
+        toggleActive: "rgba(37, 99, 235, 0.8)",
+        toggleBorder: "rgba(59, 130, 246, 0.6)",
+      };
+
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  // Derived: only tickets belonging to the active window's department
+  const activeWindowQueue = queue.filter((s) => {
+    const dept = s.department || (s.ticket?.startsWith("R") ? "Registrar" : "Cashier");
+    return dept === activeDepartment;
+  });
+
+  // Dual-window serving state: each department maintains its own serving ticket
+  const [servingByDept, setServingByDept] = useState<Record<string, QueueItem | null>>({
+    Cashier: null,
+    Registrar: null,
+  });
+  const serving = servingByDept[activeDepartment] ?? null;
+
+  const setActiveServing = (item: QueueItem | null, dept: string = activeDepartment) => {
+    setServingByDept((prev) => ({ ...prev, [dept]: item }));
+  };
+
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [paused, setPaused] = useState(false);
+
+  // Dual-window grace and warning state decoupled per department
+  const [graceByDept, setGraceByDept] = useState<Record<string, { active: boolean; time: number; warning: boolean }>>({
+    Cashier: { active: false, time: sGrace, warning: false },
+    Registrar: { active: false, time: sGrace, warning: false },
+  });
+  const graceActive = graceByDept[activeDepartment]?.active ?? false;
+  const graceTime = graceByDept[activeDepartment]?.time ?? sGrace;
+  const noShowWarning = graceByDept[activeDepartment]?.warning ?? false;
+  const [totalServed, setTotalServed] = useState(0);
+  const [noShows, setNoShows] = useState(0);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [walkInModal, setWalkInModal] = useState(false);
+  const [walkInName, setWalkInName] = useState("");
+  const [walkInPurpose, setWalkInPurpose] = useState("");
+  const [flash, setFlash] = useState(false);
+  const [recallPing, setRecallPing] = useState(false);
+  const [removeId, setRemoveId] = useState<string | null>(null);
+  const [removeConfirmTicket, setRemoveConfirmTicket] = useState<string | null>(null);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [clearingQueue, setClearingQueue] = useState(false);
+
+  // ── Change-password modal state ──────────────────────────────
+  const [pwCurrent, setPwCurrent] = useState("");
+  const [pwNew, setPwNew] = useState("");
+  const [pwConfirm, setPwConfirm] = useState("");
+  const [pwError, setPwError] = useState<string | null>(null);
+  const [pwSuccess, setPwSuccess] = useState(false);
+  const [pwLoading, setPwLoading] = useState(false);
+
+  // ── Walk-in department selector & status ─────────────────────
+  const [walkInDepartment, setWalkInDepartment] = useState("Cashier");
+  const [walkInLoading, setWalkInLoading] = useState(false);
+  const [walkInError, setWalkInError] = useState<string | null>(null);
+
+  // ── Printable ticket stub modal state ────────────────────────
+  const [printedTicket, setPrintedTicket] = useState<QueueItem | null>(null);
+
+  // ── Upcoming appointments ────────────────────────────────────
+  const [upcoming, setUpcoming] = useState<HistoryItem[]>([]);
+  const [upcomingLoading, setUpcomingLoading] = useState(false);
+
+  // ── Window Status State ──────────────────────────────────────
+  const [cashierStatus, setCashierStatus] = useState("open");
+  const [registrarStatus, setRegistrarStatus] = useState("open");
+  const [windowStatusSaving, setWindowStatusSaving] = useState(false);
+
+  // Live Queue filters
+  const [lqSearch, setLqSearch] = useState("");
+  const [lqProgram, setLqProgram] = useState("all");
+  const [lqType, setLqType] = useState("all");
+  const [lqSort, setLqSort] = useState("position");
+  const [lqDeptSel, setLqDeptSel] = useState("all");
+
+  // History filters
+  const [hSearch, setHSearch] = useState("");
+  const [hStatus, setHStatus] = useState("all");
+  const [hLevel, setHLevel] = useState("all");
+  const [hSortCol, setHSortCol] = useState("time");
+  const [hSortDir, setHSortDir] = useState("desc");
 
   // ── History tab: live stats fetched from Supabase ─────────
   const [historyStats, setHistoryStats] = useState({
@@ -497,7 +820,7 @@ export default function AdminDashboard() {
     const { data: allHistory } = await supabase
       .from("queue_tickets")
       .select("status")
-      .in("status", ["served", "noshow", "removed"]);
+      .in("status", ["served", "noshow", "removed", "cancelled"]);
 
     if (allHistory && allHistory.length > 0) {
       const total = allHistory.length;
@@ -515,9 +838,9 @@ export default function AdminDashboard() {
     const { data: logData } = await supabase
       .from("queue_tickets")
       .select("*")
-      .in("status", ["served", "noshow", "removed"])
+      .in("status", ["served", "noshow", "removed", "cancelled"])
       .order("created_at", { ascending: false })
-      .limit(50);
+      .limit(100);
     if (logData) setHistory(logData);
   };
 
@@ -531,30 +854,26 @@ export default function AdminDashboard() {
   }, [activeNav]);
 
   // ── Fetch upcoming (future-date) appointments ──────────────
-  // Student side encodes future booking dates as "YYYY-MM-DDThh:mm AM" in
-  // appointment_time. Today's bookings use plain "9:00 AM" (no "T" prefix).
-  // We query ALL waiting tickets and filter client-side by the date prefix.
   const fetchUpcoming = async () => {
     setUpcomingLoading(true);
     try {
-      const today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+      const today = getLocalTodayDateStr();
 
       const { data, error } = await supabase
         .from("queue_tickets")
         .select("*")
         .eq("status", "waiting")
         .order("appointment_time", { ascending: true })
-        .limit(100);
+        .limit(150);
 
       if (error) {
         if (import.meta.env.DEV) console.warn("[DEV] fetchUpcoming error:", error.message);
         setUpcoming([]);
       } else {
-        // Future appointments have "T" in appointment_time (e.g. "2026-07-27T9:00 AM")
         const future = (data || []).filter((row: Record<string, string>) => {
           const apptTime = row.appointment_time || "";
           if (!apptTime.includes("T")) return false;
-          const datePart = apptTime.split("T")[0]; // "YYYY-MM-DD"
+          const datePart = apptTime.split("T")[0];
           return datePart > today;
         });
         setUpcoming(future);
@@ -564,26 +883,22 @@ export default function AdminDashboard() {
     }
   };
 
-  // also load upcoming on mount
+  // Load upcoming on mount
   useEffect(() => { fetchUpcoming(); }, []);
 
   // ── Auth: session gatekeeper ──────────────────────────────
   const [session, setSession] = useState<any>(null);
-  // ── Admin identity (immutable session data only) ──────────
   const displayName: string =
     ((session?.user?.user_metadata?.display_name as string | undefined) ?? "").trim() || "Admin";
   const userEmail: string = session?.user?.email ?? "admin@sasched.io";
   const initials = displayName.substring(0, 2).toUpperCase();
-
   const [authReady, setAuthReady] = useState(false);
 
   useEffect(() => {
-    // Check existing session on mount
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setAuthReady(true);
     });
-    // Live listener — updates instantly on login or logout
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) =>
@@ -594,53 +909,35 @@ export default function AdminDashboard() {
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
-    // onAuthStateChange above sets session → null automatically
   };
 
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Bug 2 fix: guard so only ONE interval is ever running at a time
-  const graceStartedRef = useRef(false);
-  const nowStr = new Date().toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-
-  // ── Grace countdown — Bug 2 fix ──────────────────────────────
-  // Only create a new interval when grace becomes active AND one isn't
-  // already running. Toggling Pause/Resume no longer spawns duplicates.
+  // ── Dual-window Grace Countdown (ticks independently for Cashier & Registrar) ──
   useEffect(() => {
-    if (graceActive && !paused && !graceStartedRef.current) {
-      graceStartedRef.current = true;
-      timerRef.current = setInterval(() => {
-        setGraceTime((t) => {
-          if (t <= 1) {
-            if (timerRef.current) clearInterval(timerRef.current);
-            timerRef.current = null;
-            graceStartedRef.current = false;
-            setNoShowWarning(true);
-            setGraceActive(false);
-            return 0;
+    if (paused) return;
+
+    const interval = setInterval(() => {
+      setGraceByDept((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const dept of ["Cashier", "Registrar"]) {
+          if (next[dept]?.active) {
+            const cur = next[dept].time;
+            if (cur <= 1) {
+              next[dept] = { ...next[dept], active: false, time: 0, warning: true };
+              triggerChime("alert");
+              changed = true;
+            } else {
+              next[dept] = { ...next[dept], time: cur - 1 };
+              changed = true;
+            }
           }
-          return t - 1;
-        });
-      }, 1000);
-    }
-    if (!graceActive || paused) {
-      if (timerRef.current && paused) {
-        // Pause: clear interval but keep graceStartedRef=true so resume works
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-        graceStartedRef.current = false; // allow restart when resumed
-      }
-    }
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-        graceStartedRef.current = false;
-      }
-    };
-  }, [graceActive, paused]);
+        }
+        return changed ? next : prev;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [paused, sAudio]);
 
   // ── Helper: map a Supabase row → queue item shape ─────────
   const rowToQueueItem = (row: Record<string, string>, index: number): QueueItem => ({
@@ -649,10 +946,10 @@ export default function AdminDashboard() {
     service_type: row.service_type,
     time: row.appointment_time,
     type: row.booking_type === "walkin" ? "walkin" : "booked",
-    department: row.department, // "Cashier" | "Registrar"
+    department: row.department || (row.ticket_number?.startsWith("R") ? "Registrar" : "Cashier"),
     eta: (index + 1) * 2,
-    calledAt: null, // not yet called
-    id: row.id, // keep the Supabase PK for future updates
+    calledAt: null,
+    id: row.id,
   } as QueueItem);
 
   // ── Fetch initial waiting tickets + window_status from Supabase ─
@@ -669,7 +966,11 @@ export default function AdminDashboard() {
         return;
       }
 
-      setQueue((data || []).map(rowToQueueItem));
+      // Filter: only appointments for today or walk-ins belong in the live queue
+      const todayTickets = (data || []).filter((row: Record<string, string>) =>
+        isTodayAppointment(row.appointment_time)
+      );
+      setQueue(todayTickets.map(rowToQueueItem));
     };
 
     const fetchWindowStatus = async () => {
@@ -690,31 +991,37 @@ export default function AdminDashboard() {
       }
     };
 
-    // Bug 2 fix: restore the currently-serving ticket on page refresh so it
-    // doesn't go into limbo (ticket stuck as "serving" with no admin showing it)
+    // Restore currently-serving tickets for both windows without .maybeSingle() crash
     const restoreServing = async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("queue_tickets")
         .select("*")
-        .eq("status", "serving")
-        .maybeSingle();
-      if (data) {
-        setServing(rowToQueueItem(data as Record<string, string>, 0));
-        setGraceActive(false);
-        setNoShowWarning(false);
+        .eq("status", "serving");
+      if (!error && data) {
+        const restored: Record<string, QueueItem | null> = { Cashier: null, Registrar: null };
+        data.forEach((row: Record<string, string>) => {
+          const dept = row.department === "Registrar" ? "Registrar" : "Cashier";
+          restored[dept] = rowToQueueItem(row, 0);
+        });
+        setServingByDept(restored);
+        setGraceByDept({
+          Cashier: { active: false, time: sGrace, warning: false },
+          Registrar: { active: false, time: sGrace, warning: false },
+        });
       }
     };
 
-    // Bug 1 fix: initialize Served Today and No-Shows from today's DB data
-    // so the counters survive a page refresh
+    // Initialize Served Today and No-Shows using accurate local-midnight date range
     const initTodayStats = async () => {
-      const todayStr = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+      const now = new Date();
+      const localStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      const localEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).toISOString();
       const { data } = await supabase
         .from("queue_tickets")
         .select("status")
         .in("status", ["served", "noshow"])
-        .gte("created_at", todayStr + "T00:00:00.000Z")
-        .lte("created_at", todayStr + "T23:59:59.999Z");
+        .gte("created_at", localStart)
+        .lte("created_at", localEnd);
       if (data) {
         setTotalServed(data.filter((r: Record<string, string>) => r.status === "served").length);
         setNoShows(data.filter((r: Record<string, string>) => r.status === "noshow").length);
@@ -727,10 +1034,10 @@ export default function AdminDashboard() {
     initTodayStats();
   }, []);
 
-  // ── Realtime subscriptions: INSERT + UPDATE + upcoming auto-refresh ─
+  // ── Realtime subscriptions: queue_tickets + window_status ─
   useEffect(() => {
     const channel = supabase
-      .channel("queue_tickets_changes")
+      .channel("admin_realtime_sync")
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "queue_tickets" },
@@ -738,22 +1045,18 @@ export default function AdminDashboard() {
           const newRow = payload.new as Record<string, string>;
           if (newRow.status !== "waiting") return;
 
-          // Add to live queue
-          setQueue((prev) => {
-            const item = rowToQueueItem(newRow, prev.length);
-            return [...prev, item];
-          });
-
-          // Feature 3 fix: if the new ticket has a future appointment_time,
-          // automatically add it to the Upcoming Appointments panel
-          const apptTime = newRow.appointment_time || "";
-          const today = new Date().toISOString().slice(0, 10);
-          if (apptTime.includes("T")) {
-            const datePart = apptTime.split("T")[0];
-            if (datePart > today) {
+          const isToday = isTodayAppointment(newRow.appointment_time);
+          if (isToday) {
+            setQueue((prev) => {
+              if (prev.some((s) => s.ticket === newRow.ticket_number || (s.id && s.id === newRow.id))) return prev;
+              return [...prev, rowToQueueItem(newRow, prev.length)];
+            });
+          } else {
+            const apptTime = newRow.appointment_time || "";
+            const today = getLocalTodayDateStr();
+            if (apptTime.includes("T") && apptTime.split("T")[0] > today) {
               setUpcoming((prev) => {
-                // Avoid duplicates
-                if (prev.some((u) => (u as Record<string, string>).id === newRow.id)) return prev;
+                if (prev.some((u) => (u as Record<string, string>).id === newRow.id || (u as Record<string, string>).ticket_number === newRow.ticket_number)) return prev;
                 return [...prev, newRow as unknown as HistoryItem].sort((a, b) =>
                   (a.appointment_time ?? "").localeCompare(b.appointment_time ?? "")
                 );
@@ -762,20 +1065,90 @@ export default function AdminDashboard() {
           }
         }
       )
-      // Remove cancelled/terminal tickets in real time
+      // Status changes on tickets
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "queue_tickets" },
         (payload) => {
           const updated = payload.new as Record<string, string>;
+          const dept = updated.department === "Registrar" ? "Registrar" : "Cashier";
           const terminal = ["cancelled", "served", "noshow", "removed", "serving"];
+
           if (terminal.includes(updated.status)) {
             setQueue((prev) => prev.filter((s) => s.ticket !== updated.ticket_number));
           }
-          // If a future ticket gets removed/served/cancelled, pull it from upcoming too
-          setUpcoming((prev) =>
-            prev.filter((u) => (u as Record<string, string>).id !== updated.id)
-          );
+
+          // Cross-admin serving sync
+          if (updated.status === "serving") {
+            setServingByDept((prev) => ({
+              ...prev,
+              [dept]: rowToQueueItem(updated, 0),
+            }));
+          } else if (["served", "noshow", "removed", "cancelled"].includes(updated.status)) {
+            setServingByDept((prev) => {
+              const nextServing = { ...prev };
+              let changed = false;
+              if (nextServing.Cashier?.ticket === updated.ticket_number) {
+                nextServing.Cashier = null;
+                changed = true;
+              }
+              if (nextServing.Registrar?.ticket === updated.ticket_number) {
+                nextServing.Registrar = null;
+                changed = true;
+              }
+              return changed ? nextServing : prev;
+            });
+
+            // Keep History list and charts updated in real-time
+            setHistory((prev) => {
+              const exists = prev.some((h) => h.id === updated.id || h.ticket_number === updated.ticket_number);
+              if (exists) {
+                return prev.map((h) => (h.id === updated.id || h.ticket_number === updated.ticket_number ? (updated as unknown as HistoryItem) : h));
+              }
+              return [updated as unknown as HistoryItem, ...prev].slice(0, 100);
+            });
+          }
+
+          // If ticket was recalled or put back to waiting for today
+          if (updated.status === "waiting" && isTodayAppointment(updated.appointment_time)) {
+            setQueue((prev) => {
+              if (prev.some((s) => s.ticket === updated.ticket_number)) return prev;
+              return [...prev, rowToQueueItem(updated, prev.length)];
+            });
+          }
+
+          // Future ticket handling: preserve waiting updates or remove when terminal
+          if (updated.status !== "waiting") {
+            setUpcoming((prev) =>
+              prev.filter((u) => (u as Record<string, string>).id !== updated.id && (u as Record<string, string>).ticket_number !== updated.ticket_number)
+            );
+          } else {
+            const apptTime = updated.appointment_time || "";
+            const today = getLocalTodayDateStr();
+            if (apptTime.includes("T") && apptTime.split("T")[0] > today) {
+              setUpcoming((prev) => {
+                const idx = prev.findIndex((u) => (u as Record<string, string>).id === updated.id || (u as Record<string, string>).ticket_number === updated.ticket_number);
+                if (idx >= 0) {
+                  const copy = [...prev];
+                  copy[idx] = updated as unknown as HistoryItem;
+                  return copy;
+                }
+                return [...prev, updated as unknown as HistoryItem].sort((a, b) =>
+                  (a.appointment_time ?? "").localeCompare(b.appointment_time ?? "")
+                );
+              });
+            }
+          }
+        }
+      )
+      // Realtime Window Status sync across operators
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "window_status" },
+        (payload) => {
+          const newStatus = payload.new as Record<string, string>;
+          if (newStatus.cashier_status) setCashierStatus(newStatus.cashier_status);
+          if (newStatus.registrar_status) setRegistrarStatus(newStatus.registrar_status);
         }
       )
       .subscribe();
@@ -788,8 +1161,6 @@ export default function AdminDashboard() {
   // ── Update window status in Supabase ─────────────────────
   const updateWindowStatus = async (dept: string, newStatus: string) => {
     setWindowStatusSaving(true);
-
-    // Optimistically update local state first
     if (dept === "cashier") setCashierStatus(newStatus);
     else setRegistrarStatus(newStatus);
 
@@ -805,7 +1176,6 @@ export default function AdminDashboard() {
 
     if (error) {
       if (import.meta.env.DEV) console.warn("[DEV] Error updating window status:", error.message);
-      // Revert on failure
       if (dept === "cashier") setCashierStatus(cashierStatus);
       else setRegistrarStatus(registrarStatus);
     }
@@ -813,71 +1183,88 @@ export default function AdminDashboard() {
     setWindowStatusSaving(false);
   };
 
-  // ── Core queue actions (all use sGrace, no GRACE_SECONDS) ─
-  const startGrace = () => {
-    setGraceTime(sGrace);
-    setGraceActive(true);
-    setNoShowWarning(false);
+  // ── Core queue actions ───────────────────────────────────
+  const startGrace = (dept: string = activeDepartment) => {
+    setGraceByDept((prev) => ({
+      ...prev,
+      [dept]: { active: true, time: sGrace, warning: false },
+    }));
     setFlash(true);
     setTimeout(() => setFlash(false), 600);
   };
 
   const callNext = async () => {
-    // Allow action if there's a serving student (even with empty activeWindowQueue), unless paused
     if (paused || (!serving && activeWindowQueue.length === 0)) return;
 
-    // 1. Mark the current serving student as 'served' in Supabase
+    const actionTime = getNowTimeStr();
+
+    // 1. Mark current serving student as 'served' in Supabase
     if (serving) {
-      setHistory((h) =>
-        [
-          { ...serving, status: "served", time: nowStr, duration: "5 min" },
-          ...h,
-        ].slice(0, 30)
-      );
+      const historyItem: HistoryItem = {
+        id: serving.id || `hist_${Date.now()}`,
+        ticket_number: serving.ticket,
+        ticket: serving.ticket,
+        user_name: serving.name,
+        name: serving.name,
+        service_type: serving.service_type,
+        department: serving.department,
+        status: "served",
+        time: actionTime,
+        appointment_time: actionTime,
+        duration: "5 min",
+        created_at: new Date().toISOString(),
+      };
+      setHistory((h) => [historyItem, ...h].slice(0, 50));
       setTotalServed((n) => n + 1);
+      triggerChime("complete");
+
       const { error: servedError } = await supabase
         .from("queue_tickets")
         .update({ status: "served" })
         .eq("ticket_number", serving.ticket);
-      if (servedError)
-        if (import.meta.env.DEV) console.warn("[DEV] Error marking served:", servedError.message);
+      if (servedError && import.meta.env.DEV)
+        console.warn("[DEV] Error marking served:", servedError.message);
     }
 
-    // 2. If no more tickets for this window, just clear the terminal
+    // 2. If no more tickets for this window, clear the terminal
     if (activeWindowQueue.length === 0) {
-      setServing(null);
-      setNoShowWarning(false);
-      setGraceActive(false);
+      setActiveServing(null);
+      setGraceByDept((prev) => ({
+        ...prev,
+        [activeDepartment]: { active: false, time: sGrace, warning: false },
+      }));
       return;
     }
 
-    // 3. Promote the next student for THIS window to 'serving'
-    const next = activeWindowQueue[0]; // first in line for this department
+    // 3. Promote next student for THIS window to 'serving'
+    const next = activeWindowQueue[0];
     const { error: servingError } = await supabase
       .from("queue_tickets")
       .update({ status: "serving" })
       .eq("ticket_number", next.ticket);
-    if (servingError)
-      if (import.meta.env.DEV) console.warn("[DEV] Error marking serving:", servingError.message);
+    if (servingError && import.meta.env.DEV)
+      console.warn("[DEV] Error marking serving:", servingError.message);
 
-    setServing({ ...next, calledAt: nowStr });
-    // Remove only this ticket from the master queue; others departments stay
+    setActiveServing({ ...next, calledAt: actionTime });
     setQueue((q) => q.filter((s) => s.ticket !== next.ticket));
-    setNoShowWarning(false);
-    setGraceActive(false);
+    triggerChime("call");
     startGrace();
   };
 
   const recall = () => {
     setRecallPing(true);
     setTimeout(() => setRecallPing(false), 1200);
-    setGraceTime(sGrace);
-    setGraceActive(true);
-    setNoShowWarning(false);
+    setGraceByDept((prev) => ({
+      ...prev,
+      [activeDepartment]: { active: true, time: sGrace, warning: false },
+    }));
+    triggerChime("call");
   };
 
   const markNoShow = async () => {
     if (!serving) return;
+
+    const actionTime = getNowTimeStr();
 
     // Update Supabase first
     const { error } = await supabase
@@ -886,70 +1273,101 @@ export default function AdminDashboard() {
       .eq("ticket_number", serving.ticket);
     if (error && import.meta.env.DEV) console.warn("[DEV] Error marking no-show:", error.message);
 
-    // Update local state
-    setHistory((h) =>
-      [
-        { ...serving, status: "noshow", time: nowStr, duration: "—" },
-        ...h,
-      ].slice(0, 30)
-    );
+    const historyItem: HistoryItem = {
+      id: serving.id || `hist_${Date.now()}`,
+      ticket_number: serving.ticket,
+      ticket: serving.ticket,
+      user_name: serving.name,
+      name: serving.name,
+      service_type: serving.service_type,
+      department: serving.department,
+      status: "noshow",
+      time: actionTime,
+      appointment_time: actionTime,
+      duration: "—",
+      created_at: new Date().toISOString(),
+    };
+    setHistory((h) => [historyItem, ...h].slice(0, 50));
     setNoShows((n) => n + 1);
-    setNoShowWarning(false);
-    setGraceActive(false);
+    setGraceByDept((prev) => ({
+      ...prev,
+      [activeDepartment]: { active: false, time: sGrace, warning: false },
+    }));
 
-    // Bug 7 fix: use activeWindowQueue instead of full cross-dept queue
     if (sAutoAdvance && activeWindowQueue.length > 0) {
       const next = activeWindowQueue[0];
-      setServing({ ...next, calledAt: nowStr });
+      // Update Supabase to 'serving' so user gets notified
+      const { error: nextError } = await supabase
+        .from("queue_tickets")
+        .update({ status: "serving" })
+        .eq("ticket_number", next.ticket);
+      if (nextError && import.meta.env.DEV)
+        console.warn("[DEV] Error promoting auto-advance ticket:", nextError.message);
+
+      setActiveServing({ ...next, calledAt: actionTime });
       setQueue((q) => q.filter((s) => s.ticket !== next.ticket));
+      triggerChime("call");
       startGrace();
     } else {
-      setServing(null);
+      setActiveServing(null);
     }
   };
 
   const removeFromQueue = async (ticket: string) => {
-    const student = queue.find((s) => s.ticket === ticket);
+    const student = queue.find((s) => s.ticket === ticket || s.id === ticket);
+    const targetTicket = student?.ticket || ticket;
+    const actionTime = getNowTimeStr();
 
-    // Update Supabase
     const { error } = await supabase
       .from("queue_tickets")
       .update({ status: "removed" })
-      .eq("ticket_number", ticket);
+      .or(`ticket_number.eq.${targetTicket},id.eq.${ticket}`);
     if (error && import.meta.env.DEV) console.warn("[DEV] Error removing from queue:", error.message);
 
-    // Animate removal then update local state
-    setRemoveId(ticket);
+    setRemoveId(targetTicket);
     setRemoveConfirmTicket(null);
     setTimeout(() => {
-      setQueue((q) => q.filter((s) => s.ticket !== ticket));
-      if (student)
-        setHistory((h) =>
-          [
-            { ...student, status: "removed", time: nowStr, duration: "—" },
-            ...h,
-          ].slice(0, 30)
-        );
+      setQueue((q) => q.filter((s) => s.ticket !== targetTicket && s.id !== ticket));
+      if (student) {
+        const historyItem: HistoryItem = {
+          id: student.id || `hist_${Date.now()}`,
+          ticket_number: student.ticket,
+          ticket: student.ticket,
+          user_name: student.name,
+          name: student.name,
+          service_type: student.service_type,
+          department: student.department,
+          status: "removed",
+          time: actionTime,
+          appointment_time: actionTime,
+          duration: "—",
+          created_at: new Date().toISOString(),
+        };
+        setHistory((h) => [historyItem, ...h].slice(0, 50));
+      }
       setRemoveId(null);
     }, 350);
   };
 
   const addWalkIn = async () => {
     if (!walkInName || walkInLoading) return;
+
+    // Feature 2: Check max queue capacity
+    if (activeWindowQueue.length >= sMaxQueue) {
+      setWalkInError(`Queue is at maximum capacity (${sMaxQueue} users). Increase capacity in Settings or serve current clients.`);
+      return;
+    }
+
     setWalkInLoading(true);
     setWalkInError(null);
 
-    // Use a timestamp-based suffix to avoid duplicate ticket numbers across hot-reloads
+    const deptPrefix = walkInDepartment.charAt(0).toUpperCase();
     const suffix = String(Date.now()).slice(-4);
-    const ticketNum = `W-${suffix}`;
+    const ticketNum = `${deptPrefix}-W-${suffix}`;
     const now = new Date();
-    const apptTime = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    // NOTE: appointment_date column does not exist in queue_tickets
-    // Only send columns that exist in the schema
+    const apptTime = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
 
-    // Walk-in users have no real account — generate a placeholder UUID
     const walkInAccountId = crypto.randomUUID();
-    // Map department label to destination_window value used by the DB
     const destinationWindow = walkInDepartment === "Cashier" ? "Cashier" : "Registrar";
 
     const { data, error } = await supabase
@@ -957,7 +1375,7 @@ export default function AdminDashboard() {
       .insert([{
         ticket_number: ticketNum,
         user_name: walkInName.trim(),
-        account_id: walkInAccountId,     // required NOT NULL — placeholder for walk-ins
+        account_id: walkInAccountId,
         service_type: walkInPurpose || "General",
         booking_type: "walkin",
         status: "waiting",
@@ -971,7 +1389,7 @@ export default function AdminDashboard() {
     setWalkInLoading(false);
 
     if (error) {
-      console.error("[ADMIN] Walk-in insert error:", error);
+      if (import.meta.env.DEV) console.error("[ADMIN] Walk-in insert error:", error);
       setWalkInError(
         error.message.includes("violates row-level security")
           ? "Permission denied. Check your Supabase RLS policies for queue_tickets."
@@ -982,33 +1400,42 @@ export default function AdminDashboard() {
           : `Insert failed: ${error.message}`
       );
       return;
-
     }
 
-    // Success — update local queue
-    setQueue((q) => [...q, rowToQueueItem(data as Record<string, string>, q.length)]);
+    // Success — deduplicated queue update
+    const newItem = rowToQueueItem(data as Record<string, string>, queue.length);
+    setQueue((q) => q.some((s) => s.ticket === newItem.ticket) ? q : [...q, newItem]);
     setWalkInName("");
     setWalkInPurpose("");
     setWalkInError(null);
-    setWalkInDepartment(activeDepartment); // reset to default for next time
+    setWalkInDepartment(activeDepartment);
     setWalkInModal(false);
+
+    // Feature 1: Trigger paper ticket print if enabled
+    if (sPrinter) {
+      setPrintedTicket(newItem);
+    }
   };
 
-
-  // Bug 5 fix: persist settings to localStorage
+  // Persist settings to localStorage
   const saveSettings = () => {
     localStorage.setItem("admin_sGrace", String(sGrace));
     localStorage.setItem("admin_sWindow", sWindow);
     localStorage.setItem("admin_sPrinter", String(sPrinter));
     localStorage.setItem("admin_sMaxQueue", String(sMaxQueue));
     localStorage.setItem("admin_sAutoAdvance", String(sAutoAdvance));
+    localStorage.setItem("admin_sAudio", String(sAudio));
     setSettingsSaved(true);
     setTimeout(() => setSettingsSaved(false), 2400);
   };
 
-  // Bug 3: Change Password handler
+  // Change Password handler
   const handleChangePassword = async () => {
     setPwError(null);
+    if (!pwCurrent) {
+      setPwError("Current password is required.");
+      return;
+    }
     if (!pwNew || pwNew.length < 8) {
       setPwError("New password must be at least 8 characters.");
       return;
@@ -1018,6 +1445,19 @@ export default function AdminDashboard() {
       return;
     }
     setPwLoading(true);
+
+    if (session?.user?.email) {
+      const { error: verifyError } = await supabase.auth.signInWithPassword({
+        email: session.user.email,
+        password: pwCurrent,
+      });
+      if (verifyError) {
+        setPwLoading(false);
+        setPwError("Incorrect current password.");
+        return;
+      }
+    }
+
     const { error } = await supabase.auth.updateUser({ password: pwNew });
     setPwLoading(false);
     if (error) {
@@ -1034,32 +1474,48 @@ export default function AdminDashboard() {
     }, 1800);
   };
 
-  // Feature 1: Clear all waiting tickets for the active department
+  // Safe Clear Queue: only mark waiting tickets in today's active window queue as removed
   const handleClearQueue = async () => {
     setClearingQueue(true);
-    const { error } = await supabase
-      .from("queue_tickets")
-      .update({ status: "removed" })
-      .eq("status", "waiting")
-      .eq("department", activeDepartment);
-    if (error && import.meta.env.DEV) console.warn("[DEV] Clear queue error:", error.message);
-    setQueue((q) => q.filter((s) => s.department !== activeDepartment));
+    const ticketIdsToClear = activeWindowQueue.map((s) => s.id).filter(Boolean) as string[];
+    const ticketNumsToClear = activeWindowQueue.map((s) => s.ticket).filter(Boolean);
+
+    if (ticketIdsToClear.length > 0) {
+      const { error } = await supabase
+        .from("queue_tickets")
+        .update({ status: "removed" })
+        .in("id", ticketIdsToClear);
+      if (error && import.meta.env.DEV) console.warn("[DEV] Clear queue error by id:", error.message);
+    } else if (ticketNumsToClear.length > 0) {
+      const { error } = await supabase
+        .from("queue_tickets")
+        .update({ status: "removed" })
+        .in("ticket_number", ticketNumsToClear);
+      if (error && import.meta.env.DEV) console.warn("[DEV] Clear queue error by ticket:", error.message);
+    }
+
+    setQueue((q) =>
+      q.filter((s) => {
+        const dept = s.department || (s.ticket?.startsWith("R") ? "Registrar" : "Cashier");
+        return dept !== activeDepartment;
+      })
+    );
     setClearingQueue(false);
     setShowClearConfirm(false);
   };
 
-  // Feature 2: Export history as CSV
+  // Export history as CSV
   const handleExportCSV = () => {
     if (!history.length) return;
     const header = ["Ticket", "Name", "Service Type", "Department", "Status", "Time"].join(",");
     const rows = history.map((h: HistoryItem) =>
       [
-        h.ticket_number ?? "",
-        `"${(h.user_name ?? "").replace(/"/g, '""')}"`,
+        (h.ticket_number || h.ticket) ?? "",
+        `"${((h.user_name || h.name) ?? "").replace(/"/g, '""')}"`,
         h.service_type ?? "",
         h.department ?? "",
         h.status ?? "",
-        h.appointment_time ?? "",
+        (h.appointment_time || h.time) ?? "",
       ].join(",")
     );
     const csv = [header, ...rows].join("\n");
@@ -1072,13 +1528,6 @@ export default function AdminDashboard() {
     URL.revokeObjectURL(url);
   };
 
-  // ── Derived values ────────────────────────────────────────
-
-  // Smart filter: only tickets belonging to the active window's department
-  const activeDepartment = sWindow === "1" ? "Cashier" : "Registrar";
-  const activeWindowQueue = queue.filter(
-    (s) => s.department === activeDepartment
-  );
 
   // NOTE: GraceTimer, HistoryItemRow, and WindowOperationsCard are now
   // stable top-level components defined above AdminDashboard.
@@ -1112,9 +1561,9 @@ export default function AdminDashboard() {
             label: "In Queue",
             value: activeWindowQueue.length,
             icon: Users,
-            color: "#3b82f6",
-            bg: "rgba(59,130,246,0.12)",
-            border: "rgba(59,130,246,0.2)",
+            color: theme.statQueueColor,
+            bg: theme.statQueueBg,
+            border: theme.statQueueBorder,
           },
           {
             label: "Now Serving",
@@ -1200,6 +1649,8 @@ export default function AdminDashboard() {
         registrarStatus={registrarStatus}
         windowStatusSaving={windowStatusSaving}
         onUpdate={updateWindowStatus}
+        cardBg={theme.bgCard}
+        cardBorder={theme.borderCard}
       />
 
       {/* Now Serving + Controls */}
@@ -1215,11 +1666,10 @@ export default function AdminDashboard() {
         <div
           className={`fade-in ${flash ? "flash-enter" : ""}`}
           style={{
-            background:
-              "linear-gradient(145deg,#0f2057 0%,#0d1a40 60%,#0a1630 100%)",
+            background: theme.terminalBg,
             border: noShowWarning
               ? "1.5px solid rgba(248,113,113,0.5)"
-              : "1.5px solid rgba(37,99,235,0.35)",
+              : `1.5px solid ${theme.terminalBorder}`,
             borderRadius: 20,
             padding: "24px",
             position: "relative",
@@ -1227,7 +1677,8 @@ export default function AdminDashboard() {
             animationDelay: "0.1s",
             boxShadow: noShowWarning
               ? "0 0 40px rgba(239,68,68,0.15)"
-              : "0 0 40px rgba(37,99,235,0.1)",
+              : theme.terminalGlow,
+            transition: "background 0.35s ease, border-color 0.35s ease, box-shadow 0.35s ease",
           }}
         >
           <div
@@ -1240,8 +1691,9 @@ export default function AdminDashboard() {
               borderRadius: "50%",
               background: noShowWarning
                 ? "rgba(239,68,68,0.07)"
-                : "rgba(37,99,235,0.08)",
+                : theme.terminalOrb,
               pointerEvents: "none",
+              transition: "background 0.35s ease",
             }}
           />
           <div
@@ -1253,11 +1705,11 @@ export default function AdminDashboard() {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Monitor size={14} color="#60a5fa" />
+              <Monitor size={14} color={theme.primaryLight} />
               <span
                 style={{
                   fontSize: 11,
-                  color: "#60a5fa",
+                  color: theme.primaryLight,
                   fontWeight: 700,
                   letterSpacing: "0.08em",
                 }}
@@ -1265,25 +1717,55 @@ export default function AdminDashboard() {
                 WINDOW {sWindow} · NOW SERVING
               </span>
             </div>
+            {/* Modern Radar Pill Capsule */}
             <div
               style={{
-                display: "flex",
+                display: "inline-flex",
                 alignItems: "center",
-                gap: 6,
-                fontSize: 11,
-                color: paused ? "#fbbf24" : "#4ade80",
-                fontWeight: 600,
+                gap: 7,
+                background: paused
+                  ? "linear-gradient(135deg, rgba(245,158,11,0.16), rgba(217,119,6,0.06))"
+                  : "linear-gradient(135deg, rgba(34,197,94,0.16), rgba(16,185,129,0.06))",
+                border: `1px solid ${paused ? "rgba(251,191,36,0.4)" : "rgba(52,211,153,0.4)"}`,
+                boxShadow: `0 0 16px ${paused ? "rgba(245,158,11,0.18)" : "rgba(34,197,94,0.18)"}, inset 0 1px 0 rgba(255,255,255,0.14)`,
+                borderRadius: 99,
+                padding: "4px 11px 4px 9px",
+                backdropFilter: "blur(10px)",
+                transition: "all 0.3s ease",
               }}
             >
-              <div
+              {/* Animated Radar Beacon */}
+              <div style={{ position: "relative", width: 8, height: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    borderRadius: "50%",
+                    border: `1.5px solid ${paused ? "#f59e0b" : "#22c55e"}`,
+                    animation: "beaconRadar 2s cubic-bezier(0, 0, 0.2, 1) infinite",
+                  }}
+                />
+                <div
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    background: paused ? "#f59e0b" : "#22c55e",
+                    boxShadow: `0 0 8px ${paused ? "#f59e0b" : "#22c55e"}`,
+                  }}
+                />
+              </div>
+              <span
                 style={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: "50%",
-                  background: paused ? "#f59e0b" : "#22c55e",
+                  fontFamily: "'Space Mono', monospace",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: "0.12em",
+                  color: paused ? "#fde68a" : "#86efac",
                 }}
-              />
-              {paused ? "PAUSED" : "ACTIVE"}
+              >
+                {paused ? "PAUSED" : "ACTIVE"}
+              </span>
             </div>
           </div>
           {serving ? (
@@ -1293,8 +1775,8 @@ export default function AdminDashboard() {
                 style={{
                   display: "inline-block",
                   marginBottom: 16,
-                  background: "rgba(37,99,235,0.2)",
-                  border: "1px solid rgba(37,99,235,0.4)",
+                  background: isRegistrar ? "rgba(139,92,246,0.2)" : "rgba(37,99,235,0.2)",
+                  border: `1px solid ${isRegistrar ? "rgba(167,139,250,0.4)" : "rgba(37,99,235,0.4)"}`,
                   borderRadius: 14,
                   padding: "8px 18px",
                 }}
@@ -1356,6 +1838,7 @@ export default function AdminDashboard() {
                   noShowWarning={noShowWarning}
                   sGrace={sGrace}
                   onMarkNoShow={markNoShow}
+                  isRegistrar={isRegistrar}
                 />
               </div>
             </>
@@ -1393,11 +1876,12 @@ export default function AdminDashboard() {
           <div
             className="fade-in"
             style={{
-              background: "rgba(15,25,54,0.8)",
-              border: "1px solid rgba(255,255,255,0.08)",
+              background: theme.bgCard,
+              border: `1px solid ${theme.borderCard}`,
               borderRadius: 20,
               padding: "20px",
               animationDelay: "0.15s",
+              transition: "background 0.35s ease, border-color 0.35s ease",
             }}
           >
             <div
@@ -1422,10 +1906,10 @@ export default function AdminDashboard() {
                 border: "none",
                 background:
                   paused || (!serving && activeWindowQueue.length === 0)
-                    ? "rgba(37,99,235,0.2)"
+                    ? (isRegistrar ? "rgba(124,58,237,0.2)" : "rgba(37,99,235,0.2)")
                     : serving && activeWindowQueue.length === 0
                     ? "linear-gradient(135deg,#16a34a,#15803d)"
-                    : "linear-gradient(135deg,#2563eb,#1d4ed8)",
+                    : theme.primaryGradient,
                 color: "white",
                 fontSize: 16,
                 fontWeight: 800,
@@ -1441,7 +1925,7 @@ export default function AdminDashboard() {
                     ? "none"
                     : serving && activeWindowQueue.length === 0
                     ? "0 8px 28px rgba(22,163,74,0.45)"
-                    : "0 8px 28px rgba(37,99,235,0.45)",
+                    : `0 8px 28px ${theme.primaryGlow}`,
               }}
             >
               {serving && activeWindowQueue.length === 0 ? (
@@ -1533,14 +2017,17 @@ export default function AdminDashboard() {
             </div>
             <button
               className="ctrl-btn"
-              onClick={() => setWalkInModal(true)}
+              onClick={() => {
+                setWalkInDepartment(activeDepartment);
+                setWalkInModal(true);
+              }}
               style={{
                 width: "100%",
                 padding: "11px",
                 borderRadius: 12,
-                border: "1px solid rgba(167,139,250,0.25)",
-                background: "rgba(167,139,250,0.08)",
-                color: "#c4b5fd",
+                border: "1px solid " + theme.statQueueBorder,
+                background: theme.statQueueBg,
+                color: theme.statQueueColor,
                 fontSize: 13,
                 fontWeight: 700,
                 cursor: "pointer",
@@ -1577,12 +2064,13 @@ export default function AdminDashboard() {
           <div
             className="fade-in"
             style={{
-              background: "rgba(15,25,54,0.8)",
-              border: "1px solid rgba(255,255,255,0.08)",
+              background: theme.bgCard,
+              border: `1px solid ${theme.borderCard}`,
               borderRadius: 20,
               padding: "18px",
               flex: 1,
               animationDelay: "0.2s",
+              transition: "background 0.35s ease, border-color 0.35s ease",
             }}
           >
             <div
@@ -1614,13 +2102,13 @@ export default function AdminDashboard() {
                     width: 28,
                     height: 28,
                     borderRadius: 8,
-                    background: "rgba(37,99,235,0.2)",
+                    background: isRegistrar ? "rgba(139,92,246,0.2)" : "rgba(37,99,235,0.2)",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
                     fontSize: 11,
                     fontWeight: 700,
-                    color: "#93c5fd",
+                    color: theme.primaryLight,
                     flexShrink: 0,
                   }}
                 >
@@ -1643,13 +2131,21 @@ export default function AdminDashboard() {
                     style={{
                       fontSize: 10,
                       color: "rgba(255,255,255,0.35)",
-                      fontFamily: "'Space Mono',monospace",
+                      marginTop: 2,
                     }}
                   >
-                    {s.ticket} · {s.time}
+                    {s.ticket} · {s.service_type}
                   </div>
                 </div>
-                <TypeBadge type={s.type} />
+                <span
+                  style={{
+                    fontFamily: "'Space Mono',monospace",
+                    fontSize: 11,
+                    color: "rgba(255,255,255,0.4)",
+                  }}
+                >
+                  {s.time}
+                </span>
               </div>
             ))}
             {activeWindowQueue.length === 0 && (
@@ -1661,7 +2157,7 @@ export default function AdminDashboard() {
                   color: "rgba(255,255,255,0.25)",
                 }}
               >
-                Queue is empty
+                Queue is clear
               </div>
             )}
           </div>
@@ -1673,11 +2169,12 @@ export default function AdminDashboard() {
         <div
           className="fade-in"
           style={{
-            background: "rgba(15,25,54,0.8)",
-            border: "1px solid rgba(255,255,255,0.08)",
+            background: theme.bgCard,
+            border: `1px solid ${theme.borderCard}`,
             borderRadius: 20,
             overflow: "hidden",
             animationDelay: "0.25s",
+            transition: "background 0.35s ease, border-color 0.35s ease",
           }}
         >
           <div
@@ -1689,7 +2186,7 @@ export default function AdminDashboard() {
               gap: 8,
             }}
           >
-            <Users size={14} color="#60a5fa" />
+            <Users size={14} color={theme.primaryLight} />
             <span
               style={{
                 fontSize: 13,
@@ -1701,12 +2198,12 @@ export default function AdminDashboard() {
             </span>
             <div
               style={{
-                background: "rgba(37,99,235,0.25)",
-                border: "1px solid rgba(37,99,235,0.3)",
+                background: isRegistrar ? "rgba(139,92,246,0.25)" : "rgba(37,99,235,0.25)",
+                border: `1px solid ${isRegistrar ? "rgba(167,139,250,0.3)" : "rgba(37,99,235,0.3)"}`,
                 borderRadius: 99,
                 padding: "2px 9px",
                 fontSize: 11,
-                color: "#93c5fd",
+                color: theme.primaryLight,
                 fontWeight: 700,
               }}
             >
@@ -1717,7 +2214,7 @@ export default function AdminDashboard() {
               style={{
                 marginLeft: "auto",
                 fontSize: 11,
-                color: "#60a5fa",
+                color: theme.primaryLight,
                 background: "none",
                 border: "none",
                 cursor: "pointer",
@@ -1733,45 +2230,47 @@ export default function AdminDashboard() {
               <div
                 style={{
                   textAlign: "center",
-                  padding: "32px",
+                  padding: "36px",
                   fontSize: 13,
                   color: "rgba(255,255,255,0.25)",
                 }}
               >
-                Queue is empty
+                No users waiting in queue
               </div>
             ) : (
-              activeWindowQueue.slice(0, 6).map((s, i) => (
+              activeWindowQueue.map((s) => (
                 <div
                   key={s.ticket}
-                  className={`queue-row ${
-                    removeId === s.ticket ? "row-remove" : ""
-                  }`}
+                  className="queue-row"
                   style={{
-                    display: "grid",
-                    gridTemplateColumns: "32px 1fr 1fr 80px 32px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
                     padding: "10px 20px",
                     borderBottom: "1px solid rgba(255,255,255,0.04)",
-                    alignItems: "center",
-                    gap: 8,
                   }}
                 >
-                  <div
+                  <span
                     style={{
                       fontFamily: "'Space Mono',monospace",
-                      fontSize: 11,
-                      color: "rgba(255,255,255,0.25)",
+                      fontSize: 12,
                       fontWeight: 700,
+                      color: "#93c5fd",
+                      width: 52,
+                      flexShrink: 0,
                     }}
                   >
-                    {i + 1}
-                  </div>
-                  <div>
+                    {s.ticket}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <div
                       style={{
                         fontSize: 13,
                         fontWeight: 600,
                         color: "rgba(255,255,255,0.85)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
                       }}
                     >
                       {s.name}
@@ -1779,59 +2278,23 @@ export default function AdminDashboard() {
                     <div
                       style={{
                         fontSize: 10,
-                        color: "rgba(255,255,255,0.3)",
-                        fontFamily: "'Space Mono',monospace",
+                        color: "rgba(255,255,255,0.35)",
+                        marginTop: 1,
                       }}
                     >
-                      {s.ticket}
+                      {s.service_type}
                     </div>
                   </div>
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: "rgba(255,255,255,0.45)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {s.service_type}
-                  </div>
+                  <LevelBadge service_type={s.service_type} />
                   <TypeBadge type={s.type} />
-                  {/* Bug 6: two-click confirm before removing */}
-                  {removeConfirmTicket === s.ticket ? (
-                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                      <button
-                        className="ctrl-btn"
-                        onClick={() => removeFromQueue(s.ticket)}
-                        style={{
-                          padding: "3px 9px", borderRadius: 6, border: "none",
-                          background: "rgba(239,68,68,0.75)", color: "white",
-                          fontSize: 11, fontWeight: 700, cursor: "pointer",
-                          fontFamily: "'Outfit',sans-serif",
-                        }}
-                      >
-                        Confirm
-                      </button>
-                      <button
-                        onClick={() => setRemoveConfirmTicket(null)}
-                        style={{
-                          width: 22, height: 22, borderRadius: 5,
-                          background: "rgba(255,255,255,0.06)",
-                          border: "1px solid rgba(255,255,255,0.12)",
-                          display: "flex", alignItems: "center", justifyContent: "center",
-                          cursor: "pointer",
-                        }}
-                      >
-                        <X size={10} color="rgba(255,255,255,0.5)" />
-                      </button>
-                    </div>
-                  ) : (
+                  {/* GAP 2 FIX: Remove button per queue item */}
+                  {(s.ticket || s.id) && (
                     <button
-                      className="rm-btn ctrl-btn"
-                      onClick={() => setRemoveConfirmTicket(s.ticket)}
+                      className="rm-btn"
+                      onClick={() => removeFromQueue(s.ticket || s.id!)}
+                      title="Remove from queue"
                       style={{
-                        width: 26, height: 26, borderRadius: 7,
+                        width: 24, height: 24, borderRadius: 6,
                         background: "rgba(239,68,68,0.12)",
                         border: "1px solid rgba(239,68,68,0.2)",
                         display: "flex", alignItems: "center", justifyContent: "center",
@@ -1849,11 +2312,12 @@ export default function AdminDashboard() {
         <div
           className="fade-in"
           style={{
-            background: "rgba(15,25,54,0.8)",
-            border: "1px solid rgba(255,255,255,0.08)",
+            background: theme.bgCard,
+            border: `1px solid ${theme.borderCard}`,
             borderRadius: 20,
             overflow: "hidden",
             animationDelay: "0.3s",
+            transition: "background 0.35s ease, border-color 0.35s ease",
           }}
         >
           <div
@@ -1902,7 +2366,14 @@ export default function AdminDashboard() {
       {/* ── Upcoming Appointments (Bug C fix) ─────────────── */}
       <div
         className="fade-in"
-        style={{ background: "rgba(15,25,54,0.8)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 20, overflow: "hidden", marginTop: 16 }}
+        style={{
+          background: theme.bgCard,
+          border: `1px solid ${theme.borderCard}`,
+          borderRadius: 20,
+          overflow: "hidden",
+          marginTop: 16,
+          transition: "background 0.35s ease, border-color 0.35s ease",
+        }}
       >
         <div style={{ padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 8 }}>
           <Clock size={14} color="#fbbf24" />
@@ -2034,9 +2505,9 @@ export default function AdminDashboard() {
             {
               label: "Total in Queue",
               value: queue.length,
-              color: "#60a5fa",
-              bg: "rgba(59,130,246,0.12)",
-              border: "rgba(59,130,246,0.2)",
+              color: theme.statQueueColor,
+              bg: theme.statQueueBg,
+              border: theme.statQueueBorder,
             },
             {
               // Bug 1 fix: shsCnt was undefined — replaced with Cashier count
@@ -2093,10 +2564,11 @@ export default function AdminDashboard() {
 
         <div
           style={{
-            background: "rgba(15,25,54,0.8)",
-            border: "1px solid rgba(255,255,255,0.08)",
+            background: theme.bgCard,
+            border: `1px solid ${theme.borderCard}`,
             borderRadius: 20,
             overflow: "hidden",
+            transition: "background 0.35s ease, border-color 0.35s ease",
           }}
         >
           {/* Toolbar */}
@@ -2593,6 +3065,7 @@ export default function AdminDashboard() {
     const servedEntries = history.filter((h) => h.status === "served");
     const noshowEntries = history.filter((h) => h.status === "noshow");
     const removedEntries = history.filter((h) => h.status === "removed");
+    const cancelledEntries = history.filter((h) => h.status === "cancelled");
     const totalEntries = history.length;
 
     const completionRate =
@@ -2673,6 +3146,13 @@ export default function AdminDashboard() {
         bg: "rgba(148,163,184,0.08)",
         border: "rgba(148,163,184,0.2)",
         icon: MinusCircle,
+      },
+      cancelled: {
+        label: "Cancelled",
+        color: "#fb923c",
+        bg: "rgba(251,146,60,0.12)",
+        border: "rgba(251,146,60,0.25)",
+        icon: XCircle,
       },
     };
 
@@ -2755,10 +3235,11 @@ export default function AdminDashboard() {
           <div
             className="card-shadow"
             style={{
-              background: "rgba(15,25,54,0.8)",
+              background: theme.bgCard,
               borderRadius: 16,
-              border: "1px solid rgba(255,255,255,0.08)",
+              border: `1px solid ${theme.borderCard}`,
               padding: 24,
+              transition: "background 0.35s ease, border-color 0.35s ease",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -2794,10 +3275,11 @@ export default function AdminDashboard() {
           <div
             className="card-shadow"
             style={{
-              background: "rgba(15,25,54,0.8)",
+              background: theme.bgCard,
               borderRadius: 16,
-              border: "1px solid rgba(255,255,255,0.08)",
+              border: `1px solid ${theme.borderCard}`,
               padding: 24,
+              transition: "background 0.35s ease, border-color 0.35s ease",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -2833,10 +3315,11 @@ export default function AdminDashboard() {
           <div
             className="card-shadow"
             style={{
-              background: "rgba(15,25,54,0.8)",
+              background: theme.bgCard,
               borderRadius: 16,
-              border: "1px solid rgba(255,255,255,0.08)",
+              border: `1px solid ${theme.borderCard}`,
               padding: 24,
+              transition: "background 0.35s ease, border-color 0.35s ease",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -2873,10 +3356,11 @@ export default function AdminDashboard() {
           <div
             className="card-shadow"
             style={{
-              background: "rgba(15,25,54,0.8)",
+              background: theme.bgCard,
               borderRadius: 16,
-              border: "1px solid rgba(255,255,255,0.08)",
+              border: `1px solid ${theme.borderCard}`,
               padding: 24,
+              transition: "background 0.35s ease, border-color 0.35s ease",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -2914,11 +3398,12 @@ export default function AdminDashboard() {
         {/* Breakdown bar */}
         <div
           style={{
-            background: "rgba(15,25,54,0.8)",
-            border: "1px solid rgba(255,255,255,0.08)",
+            background: theme.bgCard,
+            border: `1px solid ${theme.borderCard}`,
             borderRadius: 16,
             padding: "18px 22px",
             marginBottom: 16,
+            transition: "background 0.35s ease, border-color 0.35s ease",
           }}
         >
           <div
@@ -2960,6 +3445,7 @@ export default function AdminDashboard() {
                 { count: servedEntries.length, color: "#22c55e" },
                 { count: noshowEntries.length, color: "#ef4444" },
                 { count: removedEntries.length, color: "#64748b" },
+                { count: cancelledEntries.length, color: "#fb923c" },
               ]
                 .filter((s) => s.count > 0)
                 .map((seg, i) => (
@@ -2999,6 +3485,11 @@ export default function AdminDashboard() {
                 count: removedEntries.length,
                 color: "#64748b",
               },
+              {
+                label: "Cancelled",
+                count: cancelledEntries.length,
+                color: "#fb923c",
+              },
             ].map((l) => (
               <div
                 key={l.label}
@@ -3030,13 +3521,155 @@ export default function AdminDashboard() {
           </div>
         </div>
 
+        {/* Visual Analytics Cards */}
+        {history.length > 0 && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+              gap: 16,
+              marginBottom: 20,
+            }}
+          >
+            {/* Service Type Demand */}
+            <div
+              style={{
+                background: theme.bgCard,
+                border: `1px solid ${theme.borderCard}`,
+                borderRadius: 20,
+                padding: "18px 20px",
+                transition: "background 0.35s ease, border-color 0.35s ease",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.9)" }}>
+                    Service Demand Breakdown
+                  </div>
+                  <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
+                    Volume by service category across all sessions
+                  </div>
+                </div>
+                <BarChart2 size={16} color="#818cf8" />
+              </div>
+              <div style={{ width: "100%", height: 160 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={Object.entries(
+                      history.reduce((acc, h) => {
+                        const s = h.service_type || "General";
+                        acc[s] = (acc[s] || 0) + 1;
+                        return acc;
+                      }, {} as Record<string, number>)
+                    ).map(([name, count]) => ({ name, count }))}
+                    margin={{ top: 8, right: 12, left: -24, bottom: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                    <XAxis dataKey="name" stroke="rgba(255,255,255,0.35)" fontSize={10} tickLine={false} />
+                    <YAxis stroke="rgba(255,255,255,0.35)" fontSize={10} tickLine={false} allowDecimals={false} />
+                    <Tooltip
+                      contentStyle={{
+                        background: isRegistrar ? "#1b1234" : "#0f1936",
+                        border: `1px solid ${theme.borderCard}`,
+                        borderRadius: 8,
+                        fontSize: 12,
+                        color: "#fff",
+                      }}
+                      itemStyle={{ color: "#818cf8" }}
+                    />
+                    <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                      {Object.entries(
+                        history.reduce((acc, h) => {
+                          const s = h.service_type || "General";
+                          acc[s] = (acc[s] || 0) + 1;
+                          return acc;
+                        }, {} as Record<string, number>)
+                      ).map((_, index) => (
+                        <Cell
+                          key={`cell-${index}`}
+                          fill={["#818cf8", "#38bdf8", "#34d399", "#f59e0b", "#c084fc"][index % 5]}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Department Throughput */}
+            <div
+              style={{
+                background: theme.bgCard,
+                border: `1px solid ${theme.borderCard}`,
+                borderRadius: 20,
+                padding: "18px 20px",
+                transition: "background 0.35s ease, border-color 0.35s ease",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.9)" }}>
+                    Department Throughput
+                  </div>
+                  <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
+                    Cashier vs Registrar resolution breakdown
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 10, fontSize: 10, color: "rgba(255,255,255,0.5)" }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 2, background: "#34d399", display: "inline-block" }} /> Served
+                  </span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 2, background: "#f87171", display: "inline-block" }} /> No-Show
+                  </span>
+                </div>
+              </div>
+              <div style={{ width: "100%", height: 160 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={[
+                      {
+                        dept: "Cashier",
+                        served: history.filter((h) => h.department === "Cashier" && h.status === "served").length,
+                        noshow: history.filter((h) => h.department === "Cashier" && h.status === "noshow").length,
+                      },
+                      {
+                        dept: "Registrar",
+                        served: history.filter((h) => h.department === "Registrar" && h.status === "served").length,
+                        noshow: history.filter((h) => h.department === "Registrar" && h.status === "noshow").length,
+                      },
+                    ]}
+                    margin={{ top: 8, right: 12, left: -24, bottom: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                    <XAxis dataKey="dept" stroke="rgba(255,255,255,0.35)" fontSize={11} tickLine={false} />
+                    <YAxis stroke="rgba(255,255,255,0.35)" fontSize={10} tickLine={false} allowDecimals={false} />
+                    <Tooltip
+                      contentStyle={{
+                        background: isRegistrar ? "#1b1234" : "#0f1936",
+                        border: `1px solid ${theme.borderCard}`,
+                        borderRadius: 8,
+                        fontSize: 12,
+                        color: "#fff",
+                      }}
+                    />
+                    <Bar dataKey="served" name="Served" fill="#34d399" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="noshow" name="No-Show" fill="#f87171" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* History table */}
         <div
           style={{
-            background: "rgba(15,25,54,0.8)",
-            border: "1px solid rgba(255,255,255,0.08)",
+            background: theme.bgCard,
+            border: `1px solid ${theme.borderCard}`,
             borderRadius: 20,
             overflow: "hidden",
+            transition: "background 0.35s ease, border-color 0.35s ease",
           }}
         >
           {/* Toolbar */}
@@ -3143,6 +3776,7 @@ export default function AdminDashboard() {
                 <option value="served">Served</option>
                 <option value="noshow">No-Show</option>
                 <option value="removed">Removed</option>
+                <option value="cancelled">Cancelled</option>
               </select>
               <ChevronDownIcon
                 size={12}
@@ -3306,7 +3940,7 @@ export default function AdminDashboard() {
                       fontSize: 13,
                     }}
                   >
-                    {log.ticket_number}
+                    {log.ticket_number || log.ticket}
                   </div>
                   <div>
                     <div
@@ -3316,7 +3950,7 @@ export default function AdminDashboard() {
                         color: "rgba(255,255,255,0.9)",
                       }}
                     >
-                      {log.user_name}
+                      {log.user_name || log.name}
                     </div>
                     <div
                       style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}
@@ -3328,16 +3962,16 @@ export default function AdminDashboard() {
                     {new Date(
                       log.created_at || Date.now()
                     ).toLocaleDateString()}{" "}
-                    · {log.appointment_time}
+                    · {log.appointment_time || log.time}
                   </div>
                   <div>
                     <span
                       style={{
                         fontSize: 11,
                         fontWeight: 600,
-                        color: "#93c5fd",
-                        background: "rgba(37,99,235,0.15)",
-                        border: "1px solid rgba(37,99,235,0.2)",
+                        color: log.department === "Registrar" ? "#c084fc" : "#93c5fd",
+                        background: log.department === "Registrar" ? "rgba(139,92,246,0.15)" : "rgba(37,99,235,0.15)",
+                        border: log.department === "Registrar" ? "1px solid rgba(167,139,250,0.3)" : "1px solid rgba(37,99,235,0.2)",
                         borderRadius: 6,
                         padding: "4px 8px",
                       }}
@@ -3364,6 +3998,12 @@ export default function AdminDashboard() {
                               color: "#f87171",
                               border: "1px solid rgba(239,68,68,0.2)",
                             }
+                          : log.status === "cancelled"
+                          ? {
+                              background: "rgba(251,146,60,0.15)",
+                              color: "#fb923c",
+                              border: "1px solid rgba(251,146,60,0.2)",
+                            }
                           : {
                               background: "rgba(100,116,139,0.15)",
                               color: "#94a3b8",
@@ -3375,6 +4015,8 @@ export default function AdminDashboard() {
                         ? "SERVED"
                         : log.status === "noshow"
                         ? "NO-SHOW"
+                        : log.status === "cancelled"
+                        ? "CANCELLED"
                         : "REMOVED"}
                     </span>
                   </div>
@@ -3478,11 +4120,12 @@ export default function AdminDashboard() {
     }) => (
       <div
         style={{
-          background: "rgba(15,25,54,0.8)",
-          border: "1px solid rgba(255,255,255,0.08)",
+          background: theme.bgCard,
+          border: `1px solid ${theme.borderCard}`,
           borderRadius: 18,
           overflow: "hidden",
           marginBottom: 16,
+          transition: "background 0.35s ease, border-color 0.35s ease",
         }}
       >
         <div
@@ -3584,12 +4227,12 @@ export default function AdminDashboard() {
           width: 46,
           height: 26,
           borderRadius: 99,
-          background: value ? "rgba(37,99,235,0.8)" : "rgba(255,255,255,0.1)",
+          background: value ? theme.toggleActive : "rgba(255,255,255,0.1)",
           border: `1px solid ${
-            value ? "rgba(59,130,246,0.6)" : "rgba(255,255,255,0.12)"
+            value ? theme.toggleBorder : "rgba(255,255,255,0.12)"
           }`,
           position: "relative",
-          boxShadow: value ? "0 0 12px rgba(37,99,235,0.35)" : "none",
+          boxShadow: value ? `0 0 12px ${theme.primaryGlow}` : "none",
         }}
       >
         <div
@@ -3754,7 +4397,10 @@ export default function AdminDashboard() {
                 value={sGrace}
                 onChange={(v) => {
                   setSGrace(v);
-                  setGraceTime(v);
+                  setGraceByDept((prev) => ({
+                    Cashier: { ...prev.Cashier, time: prev.Cashier.active ? prev.Cashier.time : v },
+                    Registrar: { ...prev.Registrar, time: prev.Registrar.active ? prev.Registrar.time : v },
+                  }));
                 }}
                 min={5}
                 max={60}
@@ -3801,14 +4447,14 @@ export default function AdminDashboard() {
             </SettingRow>
           </SectionCard>
 
-          {/* Hardware Integration */}
+          {/* Hardware & Audio Integration */}
           <SectionCard
             icon={Cpu}
             iconColor="#a78bfa"
             iconBg="rgba(167,139,250,0.1)"
             iconBorder="rgba(167,139,250,0.25)"
-            title="Hardware Integration"
-            subtitle="Connect physical devices to extend the queueing system's reach"
+            title="Hardware & Audio Integration"
+            subtitle="Connect physical devices and audio alerts to enhance queue operations"
           >
             <SettingRow
               label="Physical Paper Ticket Printer"
@@ -3830,9 +4476,54 @@ export default function AdminDashboard() {
                   )}
                 </span>
               }
-              noBorder
             >
               <Toggle value={sPrinter} onChange={setSPrinter} />
+            </SettingRow>
+            <SettingRow
+              label="Audio Chimes & Bell Notifications"
+              hint={
+                <span>
+                  Synthesizes chime chimes when calling tickets, grace alerts fire, or sessions complete.
+                  {!sAudio && (
+                    <span
+                      style={{ color: "rgba(255,255,255,0.3)", marginLeft: 6 }}
+                    >
+                      ● Muted
+                    </span>
+                  )}
+                  {sAudio && (
+                    <span style={{ color: "#4ade80", marginLeft: 6 }}>
+                      ● Enabled
+                    </span>
+                  )}
+                </span>
+              }
+              noBorder
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => triggerChime("call")}
+                  style={{
+                    padding: "5px 12px",
+                    borderRadius: 7,
+                    background: "rgba(167,139,250,0.15)",
+                    border: "1px solid rgba(167,139,250,0.3)",
+                    color: "#c4b5fd",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                    fontFamily: "'Outfit',sans-serif",
+                  }}
+                  title="Test Chime Sound"
+                >
+                  <Volume2 size={12} /> Test Chime
+                </button>
+                <Toggle value={sAudio} onChange={setSAudio} />
+              </div>
             </SettingRow>
           </SectionCard>
 
@@ -3999,9 +4690,10 @@ export default function AdminDashboard() {
               alignItems: "center",
               justifyContent: "space-between",
               padding: "18px 24px",
-              background: "rgba(15,25,54,0.8)",
-              border: "1px solid rgba(255,255,255,0.08)",
+              background: theme.bgCard,
+              border: `1px solid ${theme.borderCard}`,
               borderRadius: 18,
+              transition: "background 0.35s ease, border-color 0.35s ease",
             }}
           >
             <div style={{ fontSize: 12, color: "rgba(255,255,255,0.35)" }}>
@@ -4027,17 +4719,22 @@ export default function AdminDashboard() {
                 className="ctrl-btn"
                 onClick={() => {
                   setSGrace(15);
-                  setGraceTime(15);
+                  setGraceByDept({
+                    Cashier: { active: false, time: 15, warning: false },
+                    Registrar: { active: false, time: 15, warning: false },
+                  });
                   setSWindow("1");
                   setSPrinter(false);
                   setSMaxQueue(50);
                   setSAutoAdvance(false);
+                  setSAudio(true);
                   // Bug 5 fix: also clear localStorage
                   localStorage.removeItem("admin_sGrace");
                   localStorage.removeItem("admin_sWindow");
                   localStorage.removeItem("admin_sPrinter");
                   localStorage.removeItem("admin_sMaxQueue");
                   localStorage.removeItem("admin_sAutoAdvance");
+                  localStorage.removeItem("admin_sAudio");
                 }}
                 style={{
                   display: "flex",
@@ -4066,13 +4763,13 @@ export default function AdminDashboard() {
                   padding: "10px 22px",
                   borderRadius: 11,
                   border: "none",
-                  background: "linear-gradient(135deg,#2563eb,#1d4ed8)",
+                  background: theme.primaryGradient,
                   color: "white",
                   fontSize: 13,
                   fontWeight: 700,
                   cursor: "pointer",
                   fontFamily: "'Outfit',sans-serif",
-                  boxShadow: "0 6px 20px rgba(37,99,235,0.35)",
+                  boxShadow: `0 6px 20px ${theme.primaryGlow}`,
                 }}
               >
                 <CheckCheck size={14} /> Save Settings
@@ -4145,7 +4842,7 @@ export default function AdminDashboard() {
                         marginTop: 1,
                       }}
                     >
-                      {displayName} · Registrar
+                      {displayName} · {activeDepartment}
                     </div>
                   </div>
                 </div>
@@ -4301,7 +4998,6 @@ export default function AdminDashboard() {
   // Set this in Supabase Dashboard → Auth → Users → Edit → app_metadata: { "role": "admin" }
   const isAdmin = session.user?.app_metadata?.role === "admin";
   if (!isAdmin) {
-    supabase.auth.signOut();
     return (
       <div
         style={{
@@ -4314,13 +5010,55 @@ export default function AdminDashboard() {
           background: "#0d1526",
           gap: 16,
           fontFamily: "'Outfit',sans-serif",
+          padding: "20px",
+          textAlign: "center",
         }}
       >
-        <ShieldAlert size={48} color="#f87171" />
-        <div style={{ fontSize: 22, fontWeight: 800, color: "white" }}>Unauthorized</div>
-        <div style={{ fontSize: 14, color: "rgba(255,255,255,0.5)", textAlign: "center", maxWidth: 320 }}>
-          You do not have admin privileges. This session has been signed out.
+        <div
+          style={{
+            width: 72,
+            height: 72,
+            borderRadius: "50%",
+            background: "rgba(239,68,68,0.12)",
+            border: "1px solid rgba(239,68,68,0.3)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            marginBottom: 8,
+          }}
+        >
+          <ShieldAlert size={36} color="#f87171" />
         </div>
+        <div style={{ fontSize: 24, fontWeight: 800, color: "white", letterSpacing: "-0.02em" }}>
+          Unauthorized Access
+        </div>
+        <div style={{ fontSize: 14, color: "rgba(255,255,255,0.55)", maxWidth: 360, lineHeight: 1.6 }}>
+          Your account does not possess administrator privileges. Please contact your system administrator to assign the admin role to your credentials.
+        </div>
+        <button
+          onClick={async () => {
+            await supabase.auth.signOut();
+            setSession(null);
+          }}
+          className="ctrl-btn"
+          style={{
+            marginTop: 12,
+            padding: "11px 24px",
+            borderRadius: 12,
+            background: "rgba(255,255,255,0.06)",
+            border: "1px solid rgba(255,255,255,0.15)",
+            color: "white",
+            fontSize: 13,
+            fontWeight: 700,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontFamily: "'Outfit',sans-serif",
+          }}
+        >
+          <LogOut size={14} /> Back to Login
+        </button>
       </div>
     );
   }
@@ -4334,8 +5072,11 @@ export default function AdminDashboard() {
         fontFamily: "'Outfit','DM Sans',sans-serif",
         height: "100vh",
         display: "flex",
-        background: "#0d1526",
+        background: theme.bgRoot,
+        transition: "background 0.35s ease",
         overflow: "hidden",
+        ["--focus-ring" as string]: theme.primaryGlow,
+        ["--hover-glow" as string]: theme.bgCardSubtle,
       }}
     >
       <style>{CSS}</style>
@@ -4345,11 +5086,11 @@ export default function AdminDashboard() {
         style={{
           width: sidebarCollapsed ? 64 : 220,
           flexShrink: 0,
-          background: "linear-gradient(180deg,#0f1d3a 0%,#0d1526 100%)",
+          background: theme.bgSidebar,
           borderRight: "1px solid rgba(255,255,255,0.07)",
           display: "flex",
           flexDirection: "column",
-          transition: "width 0.3s cubic-bezier(.22,.68,0,1.2)",
+          transition: "width 0.3s cubic-bezier(.22,.68,0,1.2), background 0.35s ease",
           overflow: "hidden",
           position: "relative",
           zIndex: 10,
@@ -4424,15 +5165,15 @@ export default function AdminDashboard() {
                   gap: 10,
                   padding: "10px 10px",
                   borderRadius: 10,
-                  background: active ? "rgba(37,99,235,0.25)" : "transparent",
+                  background: active ? theme.activeNavBg : "transparent",
                   border: active
-                    ? "1px solid rgba(37,99,235,0.3)"
+                    ? `1px solid ${theme.activeNavBorder}`
                     : "1px solid transparent",
                 }}
               >
                 <item.icon
                   size={17}
-                  color={active ? "#60a5fa" : "rgba(255,255,255,0.4)"}
+                  color={active ? theme.activeNavColor : "rgba(255,255,255,0.4)"}
                   style={{ flexShrink: 0 }}
                 />
                 {!sidebarCollapsed && (
@@ -4440,7 +5181,7 @@ export default function AdminDashboard() {
                     style={{
                       fontSize: 13,
                       fontWeight: active ? 600 : 400,
-                      color: active ? "#93c5fd" : "rgba(255,255,255,0.5)",
+                      color: active ? theme.primaryLight : "rgba(255,255,255,0.5)",
                       whiteSpace: "nowrap",
                     }}
                   >
@@ -4450,7 +5191,7 @@ export default function AdminDashboard() {
                 {!sidebarCollapsed && active && (
                   <ChevronRight
                     size={13}
-                    color="#60a5fa"
+                    color={theme.activeNavColor}
                     style={{ marginLeft: "auto" }}
                   />
                 )}
@@ -4514,7 +5255,7 @@ export default function AdminDashboard() {
                   <div
                     style={{ fontSize: 10, color: "rgba(255,255,255,0.35)" }}
                   >
-                    Registrar
+                    {activeDepartment}
                   </div>
                 </div>
               </div>
@@ -4556,7 +5297,7 @@ export default function AdminDashboard() {
           style={{
             height: 64,
             flexShrink: 0,
-            background: "rgba(13,21,38,0.95)",
+            background: theme.bgHeader,
             backdropFilter: "blur(20px)",
             borderBottom: "1px solid rgba(255,255,255,0.07)",
             display: "flex",
@@ -4564,6 +5305,7 @@ export default function AdminDashboard() {
             justifyContent: "space-between",
             padding: "0 24px",
             gap: 16,
+            transition: "background 0.35s ease",
           }}
         >
           <div>
@@ -4793,8 +5535,8 @@ export default function AdminDashboard() {
             className="slide-in"
             onClick={(e) => e.stopPropagation()}
             style={{
-              background: "linear-gradient(145deg,#0f2057,#0d1a40)",
-              border: "1px solid rgba(167,139,250,0.3)",
+              background: theme.terminalBg,
+              border: `1px solid ${theme.terminalBorder}`,
               borderRadius: 22,
               padding: "28px",
               width: 400,
@@ -4877,22 +5619,32 @@ export default function AdminDashboard() {
                 WINDOW / DEPARTMENT
               </label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                {["Cashier", "Registrar"].map((dept) => (
-                  <button
-                    key={dept}
-                    onClick={() => setWalkInDepartment(dept)}
-                    style={{
-                      padding: "9px 14px", borderRadius: 9, cursor: "pointer",
-                      fontFamily: "'Outfit',sans-serif", fontSize: 13, fontWeight: 700,
-                      background: walkInDepartment === dept ? "rgba(167,139,250,0.2)" : "rgba(255,255,255,0.04)",
-                      border: `1px solid ${walkInDepartment === dept ? "rgba(167,139,250,0.5)" : "rgba(255,255,255,0.1)"}`,
-                      color: walkInDepartment === dept ? "#c4b5fd" : "rgba(255,255,255,0.45)",
-                      transition: "all 0.15s ease",
-                    }}
-                  >
-                    {dept}
-                  </button>
-                ))}
+                {["Cashier", "Registrar"].map((dept) => {
+                  const isSel = walkInDepartment === dept;
+                  const isReg = dept === "Registrar";
+                  return (
+                    <button
+                      key={dept}
+                      onClick={() => setWalkInDepartment(dept)}
+                      style={{
+                        padding: "9px 14px", borderRadius: 9, cursor: "pointer",
+                        fontFamily: "'Outfit',sans-serif", fontSize: 13, fontWeight: 700,
+                        background: isSel
+                          ? (isReg ? "rgba(167,139,250,0.2)" : "rgba(37,99,235,0.25)")
+                          : "rgba(255,255,255,0.04)",
+                        border: `1px solid ${isSel
+                          ? (isReg ? "rgba(167,139,250,0.5)" : "rgba(59,130,246,0.6)")
+                          : "rgba(255,255,255,0.1)"}`,
+                        color: isSel
+                          ? (isReg ? "#c4b5fd" : "#93c5fd")
+                          : "rgba(255,255,255,0.45)",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      {dept}
+                    </button>
+                  );
+                })}
               </div>
             </div>
             <div style={{ marginBottom: 22 }}>
@@ -4959,13 +5711,220 @@ export default function AdminDashboard() {
                 onClick={addWalkIn}
                 disabled={!walkInName || walkInLoading}
                 className="ctrl-btn"
-                style={{ flex: 2, padding: "12px", borderRadius: 11, border: "none", background: (!walkInName || walkInLoading) ? "rgba(167,139,250,0.2)" : "linear-gradient(135deg,#7c3aed,#6d28d9)", color: "white", fontSize: 13, fontWeight: 700, cursor: (walkInName && !walkInLoading) ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontFamily: "'Outfit',sans-serif", boxShadow: (walkInName && !walkInLoading) ? "0 6px 20px rgba(124,58,237,0.4)" : "none" }}
+                style={{
+                  flex: 2,
+                  padding: "12px",
+                  borderRadius: 11,
+                  border: "none",
+                  background: (!walkInName || walkInLoading)
+                    ? (isRegistrar ? "rgba(124,58,237,0.2)" : "rgba(37,99,235,0.2)")
+                    : theme.primaryGradient,
+                  color: "white",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  cursor: (walkInName && !walkInLoading) ? "pointer" : "not-allowed",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  fontFamily: "'Outfit',sans-serif",
+                  boxShadow: (walkInName && !walkInLoading) ? `0 6px 20px ${theme.primaryGlow}` : "none",
+                }}
               >
                 {walkInLoading ? (
                   <><div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.3)", borderTop: "2px solid white", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} /> Adding…</>
                 ) : (
                   <><UserPlus size={14} /> Add to Queue</>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Printable Paper Ticket Stub Modal ── */}
+      {printedTicket && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setPrintedTicket(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.75)",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 350,
+            padding: 16,
+          }}
+        >
+          <div
+            className="slide-in"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 360,
+              background: isRegistrar ? "#180f33" : "#0d1526",
+              borderRadius: 20,
+              border: `1px solid ${isRegistrar ? "rgba(167,139,250,0.25)" : "rgba(255,255,255,0.12)"}`,
+              boxShadow: "0 25px 60px rgba(0,0,0,0.6)",
+              overflow: "hidden",
+            }}
+          >
+            {/* Header bar */}
+            <div
+              style={{
+                padding: "14px 20px",
+                borderBottom: "1px solid rgba(255,255,255,0.08)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                background: "rgba(255,255,255,0.02)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Printer size={16} color="#38bdf8" />
+                <span style={{ fontSize: 13, fontWeight: 700, color: "white" }}>
+                  Ticket Printed Successfully
+                </span>
+              </div>
+              <button
+                onClick={() => setPrintedTicket(null)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "rgba(255,255,255,0.4)",
+                  cursor: "pointer",
+                  display: "flex",
+                }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Thermal Slip Content */}
+            <div style={{ padding: "20px 24px" }}>
+              <div
+                id="printable-slip"
+                style={{
+                  background: "#ffffff",
+                  color: "#0f172a",
+                  borderRadius: 14,
+                  padding: "24px 20px 20px",
+                  boxShadow: "0 8px 30px rgba(0,0,0,0.3)",
+                  fontFamily: "'Outfit', sans-serif",
+                  textAlign: "center",
+                  border: "1px dashed #cbd5e1",
+                  position: "relative",
+                }}
+              >
+                <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", color: "#64748b", textTransform: "uppercase" }}>
+                  SASCHED Queue System
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: "#0f172a", marginTop: 2 }}>
+                  {printedTicket.department === "Cashier" ? "Window 1 — Cashier" : "Window 2 — Registrar"}
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
+                  {new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })} · {printedTicket.time}
+                </div>
+
+                <div style={{ margin: "16px 0", borderTop: "2px dashed #e2e8f0", borderBottom: "2px dashed #e2e8f0", padding: "14px 0" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                    Your Ticket Number
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "'Space Mono', monospace",
+                      fontSize: 34,
+                      fontWeight: 800,
+                      color: "#1e293b",
+                      letterSpacing: "0.04em",
+                      marginTop: 4,
+                    }}
+                  >
+                    {printedTicket.ticket}
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#2563eb", marginTop: 4 }}>
+                    Walk-in Client
+                  </div>
+                </div>
+
+                <div style={{ textAlign: "left", fontSize: 12, lineHeight: 1.8, color: "#334155", marginBottom: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "#64748b" }}>Client Name:</span>
+                    <strong style={{ color: "#0f172a" }}>{printedTicket.name}</strong>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "#64748b" }}>Service Purpose:</span>
+                    <strong style={{ color: "#0f172a" }}>{printedTicket.service_type}</strong>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "#64748b" }}>Counter Window:</span>
+                    <strong style={{ color: "#0f172a" }}>{printedTicket.department}</strong>
+                  </div>
+                </div>
+
+                {/* Decorative barcode */}
+                <div style={{ display: "flex", justifyContent: "center", gap: 3, height: 28, opacity: 0.7, marginBottom: 8 }}>
+                  {[2, 4, 1, 3, 2, 5, 2, 1, 4, 2, 3, 1, 4, 2, 5, 1, 3, 2, 4, 2, 1, 3, 4, 2, 5, 2].map((w, i) => (
+                    <div key={i} style={{ width: w, height: "100%", background: "#0f172a" }} />
+                  ))}
+                </div>
+                <div style={{ fontSize: 9, fontFamily: "'Space Mono', monospace", color: "#94a3b8", letterSpacing: "0.15em" }}>
+                  * {printedTicket.ticket} *
+                </div>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div
+              style={{
+                padding: "14px 20px 20px",
+                display: "flex",
+                gap: 10,
+                borderTop: "1px solid rgba(255,255,255,0.06)",
+              }}
+            >
+              <button
+                onClick={() => setPrintedTicket(null)}
+                style={{
+                  flex: 1,
+                  padding: "10px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  background: "rgba(255,255,255,0.04)",
+                  color: "rgba(255,255,255,0.65)",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  fontFamily: "'Outfit', sans-serif",
+                }}
+              >
+                Close
+              </button>
+              <button
+                onClick={() => window.print()}
+                className="ctrl-btn"
+                style={{
+                  flex: 1.5,
+                  padding: "10px",
+                  borderRadius: 10,
+                  border: "none",
+                  background: "linear-gradient(135deg, #0284c7, #0369a1)",
+                  color: "white",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 6,
+                  fontFamily: "'Outfit', sans-serif",
+                  boxShadow: "0 4px 16px rgba(2,132,199,0.3)",
+                }}
+              >
+                <Printer size={14} /> Print Stub
               </button>
             </div>
           </div>

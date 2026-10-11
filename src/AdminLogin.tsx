@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { User, Lock, Eye, EyeOff, LogIn } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import myLogo from "./Asset/SAS-logo.png";
-import bgImage from "./Asset/admin-bg.png";
+import bgImage from "./Asset/admin-bg.jpg";
 
 export default function AdminLogin({ onLogin }: { onLogin: () => void }) {
   const [email, setEmail] = useState("");
